@@ -1,18 +1,15 @@
-name: "Draft new release"
+name: "Draft new release of nectar"
 
 on:
   workflow_dispatch:
     inputs:
-      component:
-        description: 'The component that should be released. Can be `cnd` or `nectar`.'
-        required: true
       version:
-        description: 'The new version of the component.'
+        description: 'The version you want to release.'
         required: true
 
 jobs:
   draft-new-release:
-    name: "Draft a new release of ${{ github.event.inputs.component }}"
+    name: "Draft a new release of nectar"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -20,13 +17,13 @@ jobs:
           token: ${{ secrets.BOTTY_GITHUB_TOKEN }}
 
       - name: Create release branch
-        run: git checkout -b release/${{ github.event.inputs.component }}/${{ github.event.inputs.version }}
+        run: git checkout -b release/nectar/${{ github.event.inputs.version }}
 
       - name: Update changelog
         uses: thomaseizinger/keep-a-changelog-new-release@v1
         with:
-          version: ${{ github.event.inputs.component }}-${{ github.event.inputs.version }}
-          changelogPath: ${{ github.event.inputs.component }}/CHANGELOG.md
+          version: nectar-${{ github.event.inputs.version }}
+          changelogPath: nectar/CHANGELOG.md
 
       - name: Initialize mandatory git config
         run: |
@@ -37,34 +34,32 @@ jobs:
         uses: thomaseizinger/set-crate-version@1.0.0
         with:
           version: ${{ github.event.inputs.version }}
-          manifest: ${{ github.event.inputs.component }}/Cargo.toml
+          manifest: nectar/Cargo.toml
 
       - name: Update Cargo.lock
         uses: actions-rs/cargo@v1
         with:
           command: update
-          args: --package ${{ github.event.inputs.component }}
+          args: --package nectar
 
       - name: Commit changelog and manifest files
         id: make-commit
         run: |
-          git add ${{ github.event.inputs.component }}/CHANGELOG.md ${{ github.event.inputs.component }}/Cargo.toml Cargo.lock
-          git commit --message "Prepare release ${{ github.event.inputs.component }} ${{ github.event.inputs.version }}"
+          git add nectar/CHANGELOG.md nectar/Cargo.toml Cargo.lock
+          git commit --message "Prepare release nectar ${{ github.event.inputs.version }}"
 
           echo "::set-output name=commit::$(git rev-parse HEAD)"
 
       - name: Push new branch
-        run: git push origin release/${{ github.event.inputs.component }}/${{ github.event.inputs.version }} --force
+        run: git push origin release/nectar/${{ github.event.inputs.version }} --force
 
       - name: Create pull request
         uses: thomaseizinger/create-pull-request@1.0.0
         with:
           GITHUB_TOKEN: ${{ secrets.BOTTY_GITHUB_TOKEN }}
-          head: release/${{ github.event.inputs.component }}/${{ github.event.inputs.version }}
+          head: release/nectar/${{ github.event.inputs.version }}
           base: master
-          title: Release version ${{ github.event.inputs.version }} of ${{ github.event.inputs.component }}
-          # Write a nice message to the user.
-          # We are claiming things here based on the `upload-cnd-release-binaries-to-release.yml` workflow.
+          title: Release version ${{ github.event.inputs.version }} of nectar
           body: |
             Hi @${{ github.actor }}!
 
