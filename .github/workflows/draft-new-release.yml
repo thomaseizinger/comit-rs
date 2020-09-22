@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
+        with:
+          token: ${{ secrets.BOTTY_GITHUB_TOKEN }}
 
       - name: Create release branch
         run: git checkout -b release/${{ github.event.inputs.component }}/${{ github.event.inputs.version }}
