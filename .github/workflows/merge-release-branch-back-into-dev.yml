@@ -19,7 +19,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BOTTY_GITHUB_TOKEN }}
           head: ${{ github.event.pull_request.head.ref }}
           base: dev
-          title: Merge ${{ github.event.pull_request.head.ref }} into dev branch
+          title: Merge `${{ github.event.pull_request.head.ref }}` into `dev`
           body: |
-            This PR merges the `${{ github.event.pull_request.head.ref }}` branch back into dev.
+            This PR merges the `${{ github.event.pull_request.head.ref }}` branch back into `dev`.
             This happens to ensure that the updates that happend on the release branch, i.e. CHANGELOG and manifest updates are also present on the dev branch.
