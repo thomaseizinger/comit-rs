@@ -31,13 +31,13 @@ jobs:
 
       - name: Extract version from branch name
         id: extract-version
-        uses: .github/actions/extract-version-from-branch
+        uses: ./.github/actions/extract-version-from-branch
         with:
           prefix: release/nectar/
 
       - name: Create release archive
         id: create-archive
-        uses: .github/actions/create-release-archive
+        uses: ./.github/actions/create-release-archive
         with:
           binary: nectar
           version: ${{ steps.extract-version.outputs.version }}
