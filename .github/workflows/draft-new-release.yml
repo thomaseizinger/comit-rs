@@ -25,7 +25,7 @@ jobs:
       - name: Update changelog
         uses: thomaseizinger/keep-a-changelog-new-release@v1
         with:
-          version: ${{ github.event.inputs.version }}
+          version: ${{ github.event.inputs.component }}-${{ github.event.inputs.version }}
           changelogPath: ${{ github.event.inputs.component }}/CHANGELOG.md
 
       - name: Initialize mandatory git config
