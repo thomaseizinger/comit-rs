@@ -1,4 +1,4 @@
-name: "Builds and uploads a release build of nectar to a newly created release"
+name: "Release nectar"
 
 on:
   release:
@@ -7,7 +7,7 @@ on:
 jobs:
   release:
     if: startsWith(github.event.release.tag_name, 'nectar-') # only trigger this if we released nectar
-    name: Build nectar binary in release mode and upload the binaries to the GitHub release
+    name: Release nectar
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]

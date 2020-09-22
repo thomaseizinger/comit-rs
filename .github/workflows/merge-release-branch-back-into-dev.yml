@@ -1,4 +1,4 @@
-name: "Merge any release branch back into dev"
+name: "Merge release branch into dev"
 
 on:
   pull_request:

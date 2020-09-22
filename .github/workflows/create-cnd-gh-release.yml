@@ -1,4 +1,4 @@
-name: "Create a new release for cnd on GitHub"
+name: "Create cnd GitHub release"
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ on:
 jobs:
   create_gh_release:
     if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/cnd/') # only merged release branches must trigger this
-    name: Create GitHub release
+    name: Create cnd GitHub release
     runs-on: ubuntu-latest
     steps:
       - name: Extract version from branch name
