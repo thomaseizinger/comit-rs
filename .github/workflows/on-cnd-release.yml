@@ -31,24 +31,16 @@ jobs:
 
       - name: Extract version from branch name
         id: extract-version
-        run: |
-          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
-          VERSION=${BRANCH_NAME#release/cnd/}
+        uses: .github/actions/extract-version-from-branch
+        with:
+          prefix: release/cnd/
 
-          echo "::set-output name=version::$VERSION"
-
-      - name: Create archive
+      - name: Create release archive
         id: create-archive
-        run: |
-          MACHINE=$(uname -m)
-          KERNEL=$(uname -s)
-          VERSION=${{ steps.extract-version.outputs.version }}
-
-          ARCHIVE="cnd_${VERSION}_${KERNEL}_${MACHINE}.tar.gz"
-
-          tar -C ./target/release --create --file=$ARCHIVE cnd
-
-          echo "::set-output name=archive::$ARCHIVE"
+        uses: .github/actions/create-release-archive
+        with:
+          binary: cnd
+          version: ${{ steps.extract-version.outputs.version }}
 
       - name: Upload ${{ matrix.os }} release binary
         uses: actions/upload-release-asset@v1

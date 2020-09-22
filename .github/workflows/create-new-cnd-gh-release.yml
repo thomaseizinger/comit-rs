@@ -15,11 +15,9 @@ jobs:
     steps:
       - name: Extract version from branch name
         id: extract-version
-        run: |
-          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
-          VERSION=${BRANCH_NAME#release/cnd/}
-
-          echo "::set-output name=version::$VERSION"
+        uses: .github/actions/extract-version-from-branch
+        with:
+          prefix: release/cnd/
 
       - name: Create Release
         id: create-release
