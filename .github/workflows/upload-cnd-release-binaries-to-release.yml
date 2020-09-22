@@ -61,20 +61,20 @@ jobs:
           asset_content_type: application/gzip
 
       - name: Login to docker
-        if: matrix.os === 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest'
         uses: azure/docker-login@v1
         with:
           username: ${{ secrets.DOCKER_REGISTRY_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
 
       - name: Build cnd docker image as ${{ steps.extract-version.outputs.version }} and latest
-        if: matrix.os === 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           VERSION="${{ steps.extract-version.outputs.version }}"
           docker build . -t comitnetwork/cnd:$VERSION -t comitnetwork/cnd:latest
 
       - name: Test docker image by starting it and curling the cnd API
-        if: matrix.os === 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           VERSION="${{ steps.extract-version.outputs.version }}"
           echo "::starting docker-container comitnetwork/cnd:$VERSION"
@@ -84,7 +84,7 @@ jobs:
           docker stop cnd_container
 
       - name: Publish docker image as ${{ steps.extract-version.outputs.version }} and latest
-        if: matrix.os === 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           VERSION="${{ steps.extract-version.outputs.version }}"
           docker push comitnetwork/cnd:$VERSION
