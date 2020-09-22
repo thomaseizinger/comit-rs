@@ -64,7 +64,7 @@ jobs:
           base: master
           title: Release version ${{ github.event.inputs.version }} of ${{ github.event.inputs.component }}
           # Write a nice message to the user.
-          # We are claiming things here based on the `publish-new-release.yml` workflow.
+          # We are claiming things here based on the `upload-cnd-release-binaries-to-release.yml` workflow.
           body: |
             Hi @${{ github.actor }}!
 
