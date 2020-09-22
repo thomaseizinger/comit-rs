@@ -7,4 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-[Unreleased]: https://github.com/comit-network/comit-rs/compare/d5d26e42a2d8dd026ae94f2c8a9e0bd80ab81133...HEAD
+## [0.2.0] - 2020-09-22
+
+[Unreleased]: https://github.com/thomaseizinger/comit-rs/compare/0.2.0...HEAD
+
+[0.2.0]: https://github.com/thomaseizinger/comit-rs/compare/212c61679d964ee8332ba6d4045cc498a35cb9ee...0.2.0
