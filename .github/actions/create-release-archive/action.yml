@@ -18,7 +18,7 @@ runs:
       run: |
         MACHINE=$(uname -m)
         KERNEL=$(uname -s)
-        VERSION=${{ inputs.name }}
+        VERSION=${{ inputs.version }}
 
         ARCHIVE="${{ inputs.binary }}_${VERSION}_${KERNEL}_${MACHINE}.tar.gz"
 

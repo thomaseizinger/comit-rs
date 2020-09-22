@@ -49,7 +49,7 @@ jobs:
         with:
           upload_url: ${{ github.event.release.upload_url }}
           asset_path: ./${{ steps.create-archive.outputs.archive }}
-          asset_name: ${{ steps.create-archives.outputs.archive }}
+          asset_name: ${{ steps.create-archive.outputs.archive }}
           asset_content_type: application/gzip
 
       - name: Login to docker
