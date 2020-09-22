@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [cnd-0.9.0] - 2020-09-22
+
 ### Added
 
 -   A set of API endpoints that expose the decentralized orderbook functionality.
@@ -144,7 +146,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -   Move config files to standard location based on platform (OSX, Windows, Linux).
 -   Align implementation with RFC-002 to use the decision header instead of status codes.
 
-[Unreleased]: https://github.com/comit-network/comit-rs/compare/0.8.0...HEAD
+[Unreleased]: https://github.com/thomaseizinger/comit-rs/compare/cnd-0.9.0...HEAD
+
+[cnd-0.9.0]: https://github.com/thomaseizinger/comit-rs/compare/0.8.0...cnd-0.9.0
 
 [0.8.0]: https://github.com/comit-network/comit-rs/compare/0.7.3...0.8.0
 
