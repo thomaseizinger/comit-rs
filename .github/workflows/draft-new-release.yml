@@ -12,7 +12,7 @@ on:
 
 jobs:
   draft-new-release:
-    name: "Draft a new release"
+    name: "Draft a new release of ${{ github.event.inputs.component }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
