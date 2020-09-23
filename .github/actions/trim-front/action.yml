@@ -17,7 +17,7 @@ runs:
     - id: trim-front
       run: |
         FULL_STRING="${{ inputs.string }}"
-        TRIMMED=${BRANCH_NAME#${{ inputs.prefix }}}
+        TRIMMED=${FULL_STRING#${{ inputs.prefix }}}
 
         echo "::set-output name=trimmed::$TRIMMED"
       shell: bash
