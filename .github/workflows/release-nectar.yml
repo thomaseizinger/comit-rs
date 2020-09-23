@@ -29,18 +29,19 @@ jobs:
         id: build
         run: cargo build --release --package nectar
 
-      - name: Extract version from branch name
+      - name: Extract version from tag name
         id: extract-version
-        uses: ./.github/actions/extract-version-from-branch
+        uses: ./.github/actions/trim-front
         with:
-          prefix: release/nectar/
+          string: ${{ github.event.release.tag_name }}
+          prefix: nectar-
 
       - name: Create release archive
         id: create-archive
         uses: ./.github/actions/create-release-archive
         with:
           binary: nectar
-          version: ${{ steps.extract-version.outputs.version }}
+          version: ${{ steps.extract-version.outputs.trimmed }}
 
       - name: Upload ${{ matrix.os }} release binary
         uses: actions/upload-release-asset@v1

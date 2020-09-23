@@ -18,8 +18,9 @@ jobs:
 
       - name: Extract version from branch name
         id: extract-version
-        uses: ./.github/actions/extract-version-from-branch
+        uses: ./.github/actions/trim-front
         with:
+          string: ${{ github.event.pull_request.head.ref }}
           prefix: release/nectar/
 
       - name: Create Release
@@ -29,7 +30,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BOTTY_GITHUB_TOKEN }}
         with:
           target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
-          tag_name: nectar-${{ steps.extract-version.outputs.version }}
-          name: nectar-${{ steps.extract-version.outputs.version }}
+          tag_name: nectar-${{ steps.extract-version.outputs.trimmed }}
+          name: nectar-${{ steps.extract-version.outputs.trimmed }}
           draft: false
           prerelease: false
