@@ -7,4 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-[Unreleased]: https://github.com/comit-network/comit-rs/compare/d5d26e42a2d8dd026ae94f2c8a9e0bd80ab81133...HEAD
+## [nectar-0.2.0] - 2020-09-23
+
+[Unreleased]: https://github.com/thomaseizinger/comit-rs/compare/nectar-0.2.0...HEAD
+
+[nectar-0.2.0]: https://github.com/thomaseizinger/comit-rs/compare/a2177af36c9511ca9c6eff622fbe1c1081148e39...nectar-0.2.0
