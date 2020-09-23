@@ -1,8 +1,10 @@
 use crate::{
-    config::{Bitcoind, Data, Geth, Network},
+    config::{Bitcoind, Data, Geth},
+    ethereum,
     ethereum::ChainId,
 };
-use config as config_rs;
+use comit::ledger;
+use libp2p::core::Multiaddr;
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -28,9 +30,14 @@ pub struct File {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Network {
+    pub listen: Vec<Multiaddr>,
+    pub peer_addresses: Option<Vec<Multiaddr>>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Bitcoin {
-    #[serde(with = "crate::config::serde_bitcoin_network")]
-    pub network: bitcoin::Network,
+    pub network: ledger::Bitcoin,
     pub bitcoind: Option<Bitcoind>,
 }
 
@@ -38,11 +45,17 @@ pub struct Bitcoin {
 pub struct Ethereum {
     pub chain_id: ChainId,
     pub geth: Option<Geth>,
+    pub tokens: Option<Tokens>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Tokens {
+    pub dai: Option<ethereum::Address>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Lightning {
-    pub network: bitcoin::Network,
+    pub network: ledger::Bitcoin,
     pub lnd: Option<Lnd>,
 }
 
@@ -65,14 +78,14 @@ impl File {
         }
     }
 
-    pub fn read<D>(config_file: D) -> Result<Self, config_rs::ConfigError>
+    pub fn read<D>(config_file: D) -> Result<Self, ::config::ConfigError>
     where
         D: AsRef<OsStr>,
     {
         let config_file = Path::new(&config_file);
 
-        let mut config = config_rs::Config::new();
-        config.merge(config_rs::File::from(config_file))?;
+        let mut config = ::config::Config::new();
+        config.merge(::config::File::from(config_file))?;
         config.try_into()
     }
 }
@@ -164,6 +177,48 @@ mod tests {
     }
 
     #[test]
+    fn network_deserializes_correctly() {
+        let file_contents = vec![
+            r#"
+            listen = ["/ip4/0.0.0.0/tcp/9939"]
+            peer_addresses = [ "/ip4/1.1.1.1/tcp/9939" ]
+            "#,
+            r#"
+            listen = ["/ip4/0.0.0.0/tcp/9939", "/ip4/127.0.0.1/tcp/9939"]
+            peer_addresses = [
+                "/ip4/1.1.1.1/tcp/9939",
+                "/ip4/2.2.2.2/tcp/3456"
+            ]
+            "#,
+        ];
+
+        let expected = vec![
+            Network {
+                listen: vec!["/ip4/0.0.0.0/tcp/9939".parse().unwrap()],
+                peer_addresses: Some(vec!["/ip4/1.1.1.1/tcp/9939".parse().unwrap()]),
+            },
+            Network {
+                listen: (vec![
+                    "/ip4/0.0.0.0/tcp/9939".parse().unwrap(),
+                    "/ip4/127.0.0.1/tcp/9939".parse().unwrap(),
+                ]),
+                peer_addresses: Some(vec![
+                    "/ip4/1.1.1.1/tcp/9939".parse().unwrap(),
+                    "/ip4/2.2.2.2/tcp/3456".parse().unwrap(),
+                ]),
+            },
+        ];
+
+        let actual = file_contents
+            .into_iter()
+            .map(toml::from_str)
+            .collect::<Result<Vec<Network>, toml::de::Error>>()
+            .unwrap();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn cors_deserializes_correctly() {
         let file_contents = vec![
             r#"
@@ -231,6 +286,9 @@ chain_id = 1337
 [ethereum.geth]
 node_url = "http://localhost:8545/"
 
+[ethereum.tokens]
+dai = "0x6b175474e89094c44da98b954eedeac495271d0f"
+
 [lightning]
 network = "regtest"
 
@@ -241,6 +299,7 @@ dir = "/foo/bar"
         let file = File {
             network: Some(Network {
                 listen: vec!["/ip4/0.0.0.0/tcp/9939".parse().unwrap()],
+                peer_addresses: None,
             }),
             http_api: Some(HttpApi {
                 socket: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8000),
@@ -255,19 +314,26 @@ dir = "/foo/bar"
                 level: Some(Level::Debug),
             }),
             bitcoin: Some(Bitcoin {
-                network: bitcoin::Network::Regtest,
+                network: ledger::Bitcoin::Regtest,
                 bitcoind: Some(Bitcoind {
                     node_url: "http://localhost:18443".parse().unwrap(),
                 }),
             }),
             ethereum: Some(Ethereum {
-                chain_id: ChainId::regtest(),
+                chain_id: ChainId::GETH_DEV,
                 geth: Some(Geth {
                     node_url: "http://localhost:8545".parse().unwrap(),
                 }),
+                tokens: Some(Tokens {
+                    dai: Some(
+                        "0x6b175474e89094c44da98b954eedeac495271d0f"
+                            .parse()
+                            .unwrap(),
+                    ),
+                }),
             }),
             lightning: Some(Lightning {
-                network: bitcoin::Network::Regtest,
+                network: ledger::Bitcoin::Regtest,
                 lnd: Some(Lnd {
                     rest_api_url: "https://localhost:8080".parse().unwrap(),
                     dir: PathBuf::from("/foo/bar"),
@@ -285,7 +351,8 @@ dir = "/foo/bar"
         let default_file = File::default();
 
         // convert to settings, this populates all empty fields with defaults
-        let effective_settings = Settings::from_config_file_and_defaults(default_file).unwrap();
+        let effective_settings =
+            Settings::from_config_file_and_defaults(default_file, None).unwrap();
 
         // write settings back to file
         let file_with_effective_settings = File::from(effective_settings);
@@ -318,19 +385,19 @@ dir = "/foo/bar"
 
         let expected = vec![
             Bitcoin {
-                network: bitcoin::Network::Bitcoin,
+                network: ledger::Bitcoin::Mainnet,
                 bitcoind: Some(Bitcoind {
                     node_url: Url::parse("http://example.com:8332").unwrap(),
                 }),
             },
             Bitcoin {
-                network: bitcoin::Network::Testnet,
+                network: ledger::Bitcoin::Testnet,
                 bitcoind: Some(Bitcoind {
                     node_url: Url::parse("http://example.com:18332").unwrap(),
                 }),
             },
             Bitcoin {
-                network: bitcoin::Network::Regtest,
+                network: ledger::Bitcoin::Regtest,
                 bitcoind: Some(Bitcoind {
                     node_url: Url::parse("http://example.com:18443").unwrap(),
                 }),
@@ -350,39 +417,66 @@ dir = "/foo/bar"
     fn ethereum_deserializes_correctly() {
         let file_contents = vec![
             r#"
-            chain_id = 1337
+            chain_id = 42
             [geth]
             node_url = "http://example.com:8545"
+            [tokens]
+            dai = "0xc4375b7de8af5a38a93548eb8453a498222c4ff2"
             "#,
             r#"
             chain_id = 3
             [geth]
             node_url = "http://example.com:8545"
+            [tokens]
+            dai = "0xaD6D458402F60fD3Bd25163575031ACDce07538D"
             "#,
             r#"
             chain_id = 1
             [geth]
             node_url = "http://example.com:8545"
+            [tokens]
+            dai = "0x6b175474e89094c44da98b954eedeac495271d0f"
             "#,
         ];
 
         let expected = vec![
             Ethereum {
-                chain_id: ChainId::regtest(),
+                chain_id: ChainId::KOVAN,
                 geth: Some(Geth {
                     node_url: Url::parse("http://example.com:8545").unwrap(),
                 }),
-            },
-            Ethereum {
-                chain_id: ChainId::ropsten(),
-                geth: Some(Geth {
-                    node_url: Url::parse("http://example.com:8545").unwrap(),
+                tokens: Some(Tokens {
+                    dai: Some(
+                        "0xc4375b7de8af5a38a93548eb8453a498222c4ff2"
+                            .parse()
+                            .unwrap(),
+                    ),
                 }),
             },
             Ethereum {
-                chain_id: ChainId::mainnet(),
+                chain_id: ChainId::ROPSTEN,
                 geth: Some(Geth {
                     node_url: Url::parse("http://example.com:8545").unwrap(),
+                }),
+                tokens: Some(Tokens {
+                    dai: Some(
+                        "0xaD6D458402F60fD3Bd25163575031ACDce07538D"
+                            .parse()
+                            .unwrap(),
+                    ),
+                }),
+            },
+            Ethereum {
+                chain_id: ChainId::MAINNET,
+                geth: Some(Geth {
+                    node_url: Url::parse("http://example.com:8545").unwrap(),
+                }),
+                tokens: Some(Tokens {
+                    dai: Some(
+                        "0x6b175474e89094c44da98b954eedeac495271d0f"
+                            .parse()
+                            .unwrap(),
+                    ),
                 }),
             },
         ];

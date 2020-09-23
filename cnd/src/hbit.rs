@@ -1,12 +1,13 @@
 use crate::{
     btsieve::{BlockByHash, LatestBlock},
-    swap_protocols::{state, state::Update},
+    ledger, state,
+    state::Update,
     tracing_ext::InstrumentProtocol,
     LocalSwapId, Role, Side,
 };
-use bitcoin::{Block, BlockHash};
-use chrono::NaiveDateTime;
-use comit::{asset, htlc_location, transaction, Protocol, Secret};
+use bitcoin::{Address, Block, BlockHash};
+use chrono::{DateTime, Utc};
+use comit::{asset, htlc_location, transaction, LockProtocol, Secret};
 pub use comit::{hbit::*, identity};
 use futures::TryStreamExt;
 use std::{
@@ -23,16 +24,16 @@ use tokio::sync::Mutex;
 pub async fn new<C>(
     id: LocalSwapId,
     params: Params,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     role: Role,
     side: Side,
     states: Arc<States>,
-    connector: Arc<C>,
+    connector: impl AsRef<C>,
 ) where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = BlockHash>,
 {
     let mut events = comit::hbit::new(connector.as_ref(), params, start_of_swap)
-        .instrument_protocol(id, role, side, Protocol::Hbit)
+        .instrument_protocol(id, role, side, LockProtocol::Hbit)
         .inspect_ok(|event| tracing::info!("yielded event {}", event))
         .inspect_err(|error| tracing::error!("swap failed with {:?}", error));
 
@@ -41,6 +42,15 @@ pub async fn new<C>(
     }
 
     tracing::info!("swap finished");
+}
+
+/// Data required to create a swap that involves Bitcoin.
+#[derive(Clone, Debug)]
+pub struct CreatedSwap {
+    pub amount: asset::Bitcoin,
+    pub final_identity: Address,
+    pub network: ledger::Bitcoin,
+    pub absolute_expiry: u32,
 }
 
 #[derive(Default, Debug)]
@@ -171,7 +181,6 @@ impl state::Update<Event> for States {
 
 /// Represents states that an Bitcoin HTLC can be in.
 #[derive(Debug, Clone, strum_macros::Display)]
-#[allow(clippy::large_enum_variant)]
 pub enum State {
     None,
     Funded {

@@ -110,7 +110,7 @@ pub mod bitcoin {
             public_key in identity::bitcoin(),
             network in ledger::bitcoin(),
         ) -> ::bitcoin::Address {
-            ::bitcoin::Address::p2wpkh(&public_key.into(), network.into())
+            ::bitcoin::Address::p2wpkh(&public_key.into(), network.into()).expect("our public keys are always compressed")
         }
     }
 }
@@ -148,7 +148,7 @@ pub mod asset {
 
 pub mod herc20 {
     use super::*;
-    use comit::herc20;
+    use crate::herc20;
 
     prop_compose! {
         pub fn created_swap()(
@@ -169,7 +169,7 @@ pub mod herc20 {
 
 pub mod halbit {
     use super::*;
-    use comit::halbit;
+    use crate::halbit;
 
     prop_compose! {
         pub fn created_swap()(
@@ -190,7 +190,7 @@ pub mod halbit {
 
 pub mod hbit {
     use super::*;
-    use comit::hbit;
+    use crate::hbit;
 
     prop_compose! {
         pub fn created_swap()(
@@ -211,13 +211,13 @@ pub mod hbit {
 
 pub mod db {
     use super::*;
-    use crate::db;
+    use crate::storage;
     use std::fmt::Debug;
 
     pub fn created_swap<A, B>(
         alpha: impl Strategy<Value = A>,
         beta: impl Strategy<Value = B>,
-    ) -> impl Strategy<Value = db::CreatedSwap<A, B>>
+    ) -> impl Strategy<Value = storage::CreatedSwap<A, B>>
     where
         A: Debug,
         B: Debug,
@@ -231,7 +231,7 @@ pub mod db {
             timestamp(),
         )
             .prop_map(|(swap_id, alpha, beta, peer, role, start_of_swap)| {
-                db::CreatedSwap {
+                storage::CreatedSwap {
                     swap_id,
                     alpha,
                     beta,
@@ -245,7 +245,7 @@ pub mod db {
 
     pub mod tables {
         use super::*;
-        use db::{tables, tables::IntoInsertable};
+        use storage::{tables, tables::IntoInsertable};
 
         prop_compose! {
             pub fn insertable_swap()(

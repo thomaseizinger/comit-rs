@@ -1,119 +1,255 @@
 import crypto from "crypto";
-import { bip32, networks } from "bitcoinjs-lib";
 import { Logger } from "log4js";
 import BitcoinRpcClient from "bitcoin-core";
-import { BitcoindWallet as BitcoinWalletSdk, BitcoindWallet } from "comit-sdk";
 import { toBitcoin, toSatoshi } from "satoshi-bitcoin";
-import { pollUntilMinted, Wallet } from "./index";
-import { BitcoinNodeConfig } from "../ledgers";
-import { Asset } from "../asset";
+import axios, { AxiosError, AxiosInstance, Method } from "axios";
+import { BitcoinNodeConfig } from "../environment";
+import { sleep } from "../utils";
+import pTimeout from "p-timeout";
 
-export class BitcoinWallet implements Wallet {
-    public static async newInstance(config: BitcoinNodeConfig, logger: Logger) {
-        const hdKey = bip32.fromSeed(crypto.randomBytes(32), networks.regtest);
-        const derivationPath = "44h/1h/0h/0/*";
-        const walletDescriptor = `wpkh(${hdKey.toBase58()}/${derivationPath})`;
+export interface BitcoinWallet {
+    MaximumFee: bigint;
+    getAddress(): Promise<string>;
+    getBalance(): Promise<bigint>;
+    sendToAddress(
+        address: string,
+        satoshis: number,
+        network: Network
+    ): Promise<string>;
+    broadcastTransaction(
+        transactionHex: string,
+        network: Network
+    ): Promise<string>;
 
-        const walletName = hdKey.fingerprint.toString("hex");
-        const wallet = await BitcoindWallet.newInstance({
-            url: config.rpcUrl,
-            username: config.username,
-            password: config.password,
-            walletDescriptor,
-            walletName,
-            rescan: false,
-        });
+    getFee(): string;
 
-        const rpcClientArgs = {
+    mint(satoshis: bigint): Promise<void>;
+}
+
+export class BitcoinFaucet {
+    private readonly minerClient: BitcoinRpcClient;
+
+    constructor(config: BitcoinNodeConfig, private readonly logger: Logger) {
+        this.minerClient = new BitcoinRpcClient({
             network: config.network,
             port: config.rpcPort,
             host: config.host,
             username: config.username,
             password: config.password,
-        };
-
-        const minerClient = new BitcoinRpcClient({
-            ...rpcClientArgs,
             wallet: config.minerWallet,
         });
-
-        const defaultClient = new BitcoinRpcClient({
-            ...rpcClientArgs,
-        });
-
-        return new BitcoinWallet(wallet, defaultClient, minerClient, logger);
     }
 
-    public MaximumFee = 100000;
-
-    private constructor(
-        public readonly inner: BitcoinWalletSdk,
-        private readonly defaultClient: BitcoinRpcClient,
-        private readonly minerClient: BitcoinRpcClient,
-        private readonly logger: Logger
-    ) {}
-
-    public async mintToAddress(
-        minimumExpectedBalance: bigint,
-        toAddress: string
+    public async mint(
+        satoshis: bigint,
+        address: string,
+        getBalance: () => Promise<bigint>
     ): Promise<void> {
-        const blockHeight = await this.defaultClient.getBlockCount();
+        const startingBalance = await getBalance();
+
+        const blockHeight = await this.minerClient.getBlockCount();
+
         if (blockHeight < 101) {
             throw new Error(
                 "unable to mint bitcoin, coinbase transactions are not yet spendable"
             );
         }
 
-        // make sure we have at least twice as much
-        const amount = toBitcoin(
-            (minimumExpectedBalance * BigInt(2)).toString()
+        const btc = toBitcoin(satoshis.toString());
+
+        await this.minerClient.sendToAddress(address, btc);
+        this.logger.info("Minted", btc, "BTC to", address);
+
+        await waitUntilBalanceReaches(getBalance, startingBalance + satoshis);
+    }
+}
+
+async function waitUntilBalanceReaches(
+    getBalance: () => Promise<bigint>,
+    expectedBalance: bigint
+): Promise<void> {
+    let currentBalance = await getBalance();
+
+    const timeout = 10;
+    const error = new Error(
+        `Balance did not reach ${expectedBalance} after ${timeout} seconds, starting balance was ${currentBalance}`
+    );
+    Error.captureStackTrace(error);
+
+    const poller = async () => {
+        while (currentBalance < expectedBalance) {
+            await sleep(500);
+            currentBalance = await getBalance();
+        }
+    };
+
+    await pTimeout(poller(), timeout * 1000, error);
+}
+
+export class BitcoindWallet implements BitcoinWallet {
+    public static async newInstance(config: BitcoinNodeConfig, logger: Logger) {
+        const walletName = crypto.randomBytes(32).toString("hex");
+        const auth = {
+            username: config.username,
+            password: config.password,
+        };
+
+        await newAxiosClient(config.rpcUrl, auth, logger).request({
+            data: {
+                jsonrpc: "1.0",
+                method: "createwallet",
+                params: [walletName],
+            },
+        });
+
+        logger.info("Name of generated Bitcoin wallet:", walletName);
+
+        const walletClient = newAxiosClient(
+            `${config.rpcUrl}/wallet/${walletName}`,
+            auth,
+            logger
         );
+        const faucet = new BitcoinFaucet(config, logger);
 
-        await this.minerClient.sendToAddress(toAddress, amount);
-
-        this.logger.info("Minted", amount, "bitcoin for", toAddress);
+        return new BitcoindWallet(faucet, walletClient);
     }
 
-    public async mint(asset: Asset): Promise<void> {
-        if (asset.name !== "bitcoin") {
-            throw new Error(
-                `Cannot mint asset ${asset.name} with BitcoinWallet`
+    public MaximumFee = 100000n;
+
+    constructor(
+        private readonly faucet: BitcoinFaucet,
+        private readonly rpcClient: AxiosInstance
+    ) {}
+
+    public async mint(satoshis: bigint): Promise<void> {
+        await this.faucet.mint(satoshis, await this.getAddress(), async () =>
+            this.getBalance()
+        );
+    }
+
+    public async getBalance(): Promise<bigint> {
+        const res = await this.rpcClient.request({
+            data: { jsonrpc: "1.0", method: "getbalance", params: [] },
+        });
+
+        return BigInt(toSatoshi(res.data.result));
+    }
+
+    public async getAddress(): Promise<string> {
+        const res = await this.rpcClient.request({
+            data: {
+                jsonrpc: "1.0",
+                method: "getnewaddress",
+                params: ["", "bech32"],
+            },
+        });
+
+        return res.data.result;
+    }
+
+    public async sendToAddress(
+        address: string,
+        satoshis: number,
+        network: Network
+    ): Promise<string> {
+        await this.assertNetwork(network);
+
+        const res = await this.rpcClient.request({
+            data: {
+                jsonrpc: "1.0",
+                method: "sendtoaddress",
+                params: [address, toBitcoin(satoshis)],
+            },
+        });
+
+        return res.data.result;
+    }
+
+    public async broadcastTransaction(
+        transactionHex: string,
+        network: Network
+    ): Promise<string> {
+        await this.assertNetwork(network);
+
+        const res = await this.rpcClient.request({
+            data: {
+                jsonrpc: "1.0",
+                method: "sendrawtransaction",
+                params: [transactionHex],
+            },
+        });
+
+        return res.data.result;
+    }
+
+    public getFee(): string {
+        // should be dynamic in a real application or use `estimatesmartfee`
+        return "150";
+    }
+
+    private async assertNetwork(network: Network): Promise<void> {
+        const res = await this.rpcClient.request({
+            data: { jsonrpc: "1.0", method: "getblockchaininfo", params: [] },
+        });
+
+        if (res.data.result.chain !== network) {
+            return Promise.reject(
+                `This wallet is only connected to the ${network} network and cannot perform actions on the ${network} network`
             );
         }
+    }
+}
 
-        const startingBalance = await this.getBalanceByAsset(asset);
+function newAxiosClient(
+    baseUrl: string,
+    auth: { password: string; username: string },
+    logger: Logger
+) {
+    const client = axios.create({
+        baseURL: baseUrl,
+        method: "post" as Method,
+        auth,
+    });
+    client.interceptors.response.use(
+        (response) => response,
+        (error) => jsonRpcResponseInterceptor(logger, error)
+    );
 
-        const minimumExpectedBalance = BigInt(asset.quantity);
+    return client;
+}
 
-        await this.mintToAddress(minimumExpectedBalance, await this.address());
+export type Network = "main" | "test" | "regtest";
 
-        await pollUntilMinted(
-            this,
-            startingBalance + minimumExpectedBalance,
-            asset
-        );
+/**
+ * A simplied representation of a Bitcoin transaction
+ */
+export interface BitcoinTransaction {
+    hex: string;
+    txid: string;
+    confirmations: number;
+}
+
+async function jsonRpcResponseInterceptor(
+    logger: Logger,
+    error: AxiosError
+): Promise<AxiosError> {
+    const response = error.response;
+
+    if (!response) {
+        return Promise.reject(error);
     }
 
-    public async address(): Promise<string> {
-        return this.inner.getAddress();
+    const body = response.data;
+
+    if (!body.error) {
+        return Promise.reject(error);
     }
 
-    public async getBalanceByAsset(asset: Asset): Promise<bigint> {
-        if (asset.name !== "bitcoin") {
-            throw new Error(
-                `Cannot read balance for asset ${asset.name} with BitcoinWallet`
-            );
-        }
-        return BigInt(toSatoshi(await this.inner.getBalance()));
-    }
+    logger.error("JSON-RPC request failed. Original request:", error.config);
 
-    public async getBlockchainTime(): Promise<number> {
-        const blockchainInfo = await this.defaultClient.getBlockchainInfo();
-
-        return blockchainInfo.mediantime;
-    }
-
-    public async close(): Promise<void> {
-        return this.inner.close();
-    }
+    return Promise.reject(
+        `JSON-RPC request '${
+            JSON.parse(error.config.data).method
+        }' failed with '${body.error.message}'`
+    );
 }

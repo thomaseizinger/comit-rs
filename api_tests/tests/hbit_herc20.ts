@@ -3,22 +3,15 @@
  * @ledger ethereum
  */
 
-import SwapFactory from "../src/actors/swap_factory";
+import SwapFactory from "../src/swap_factory";
 import { sleep } from "../src/utils";
-import { twoActorTest } from "../src/actor_test";
+import { startAliceAndBob } from "../src/actor_test";
 
 describe("hbit-herc20", () => {
     it(
         "hbit-herc20-alice-redeems-bob-redeems",
-        twoActorTest(async ({ alice, bob }) => {
-            const bodies = (
-                await SwapFactory.newSwap(alice, bob, {
-                    ledgers: {
-                        alpha: "bitcoin",
-                        beta: "ethereum",
-                    },
-                })
-            ).hbitHerc20;
+        startAliceAndBob(async ([alice, bob]) => {
+            const bodies = (await SwapFactory.newSwap(alice, bob)).hbitHerc20;
 
             await alice.createHbitHerc20Swap(bodies.alice);
             await bob.createHbitHerc20Swap(bodies.bob);
@@ -41,13 +34,9 @@ describe("hbit-herc20", () => {
 
     it(
         "hbit-herc20-bob-refunds-alice-refunds",
-        twoActorTest(async ({ alice, bob }) => {
+        startAliceAndBob(async ([alice, bob]) => {
             const bodies = (
                 await SwapFactory.newSwap(alice, bob, {
-                    ledgers: {
-                        alpha: "bitcoin",
-                        beta: "ethereum",
-                    },
                     instantRefund: true,
                 })
             ).hbitHerc20;

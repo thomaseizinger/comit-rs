@@ -1,12 +1,15 @@
-use crate::{storage::SwapContext, Load, ProtocolSpawner, Role, Side, Spawn, Storage};
-use chrono::NaiveDateTime;
+use crate::{
+    storage::{Load, SwapContext},
+    ProtocolSpawner, Role, Side, Spawn, Storage,
+};
+use chrono::{DateTime, Utc};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Swap<A, B> {
     pub role: Role,
     pub alpha: A,
     pub beta: B,
-    pub start_of_swap: NaiveDateTime,
+    pub start_of_swap: DateTime<Utc>,
 }
 
 pub async fn spawn(

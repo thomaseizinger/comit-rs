@@ -2,12 +2,12 @@ use crate::{
     asset,
     btsieve::{ethereum::ReceiptByHash, BlockByHash, LatestBlock},
     ethereum::{Block, Hash},
-    htlc_location, identity,
-    swap_protocols::{state, state::Update},
+    htlc_location, identity, state,
+    state::Update,
     tracing_ext::InstrumentProtocol,
-    transaction, LocalSwapId, Protocol, Role, Secret, Side,
+    transaction, LocalSwapId, LockProtocol, Role, Secret, Side,
 };
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -15,6 +15,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+use crate::ethereum::ChainId;
 pub use comit::herc20::*;
 
 /// Creates a new instance of the herc20 protocol, annotated with tracing spans
@@ -25,16 +26,16 @@ pub use comit::herc20::*;
 pub async fn new<C>(
     id: LocalSwapId,
     params: Params,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     role: Role,
     side: Side,
     states: Arc<States>,
-    connector: Arc<C>,
+    connector: impl AsRef<C>,
 ) where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = Hash> + ReceiptByHash,
 {
     let mut events = comit::herc20::new(connector.as_ref(), params, start_of_swap)
-        .instrument_protocol(id, role, side, Protocol::Herc20)
+        .instrument_protocol(id, role, side, LockProtocol::Herc20)
         .inspect_ok(|event| tracing::info!("yielded event {}", event))
         .inspect_err(|error| tracing::error!("swap failed with {:?}", error));
 
@@ -43,6 +44,15 @@ pub async fn new<C>(
     }
 
     tracing::info!("swap finished");
+}
+
+/// Data required to create a swap that involves an ERC20 token.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreatedSwap {
+    pub asset: asset::Erc20,
+    pub identity: identity::Ethereum,
+    pub chain_id: ChainId,
+    pub absolute_expiry: u32,
 }
 
 #[derive(Default, Debug)]

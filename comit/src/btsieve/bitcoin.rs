@@ -11,8 +11,8 @@ use crate::{
     },
     identity,
 };
-use bitcoin::{self, BitcoinHash, OutPoint};
-use chrono::NaiveDateTime;
+use bitcoin::{self, OutPoint};
+use chrono::{DateTime, Utc};
 use genawaiter::GeneratorState;
 
 type Hash = bitcoin::BlockHash;
@@ -22,7 +22,7 @@ impl BlockHash for Block {
     type BlockHash = Hash;
 
     fn block_hash(&self) -> Hash {
-        self.bitcoin_hash()
+        self.block_hash()
     }
 }
 
@@ -34,10 +34,11 @@ impl PreviousBlockHash for Block {
     }
 }
 
+#[tracing::instrument(level = "debug", skip(blockchain_connector, start_of_swap, identity), fields(%outpoint))]
 pub async fn watch_for_spent_outpoint<C>(
     blockchain_connector: &C,
-    start_of_swap: NaiveDateTime,
-    from_outpoint: OutPoint,
+    start_of_swap: DateTime<Utc>,
+    outpoint: OutPoint,
     identity: identity::Bitcoin,
 ) -> anyhow::Result<(bitcoin::Transaction, bitcoin::TxIn)>
 where
@@ -47,7 +48,7 @@ where
         transaction
             .input
             .iter()
-            .filter(|txin| txin.previous_output == from_outpoint)
+            .filter(|txin| txin.previous_output == outpoint)
             .find(|txin| txin.witness.contains(&identity.to_bytes()))
             .cloned()
     })
@@ -56,11 +57,11 @@ where
     Ok((transaction, txin))
 }
 
-#[tracing::instrument(level = "trace", skip(blockchain_connector, start_of_swap))]
+#[tracing::instrument(level = "debug", skip(blockchain_connector, start_of_swap))]
 pub async fn watch_for_created_outpoint<C>(
     blockchain_connector: &C,
-    start_of_swap: NaiveDateTime,
-    compute_address: bitcoin::Address,
+    start_of_swap: DateTime<Utc>,
+    address: bitcoin::Address,
 ) -> anyhow::Result<(bitcoin::Transaction, bitcoin::OutPoint)>
 where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = Hash>,
@@ -78,7 +79,7 @@ where
                 #[allow(clippy::cast_possible_truncation)]
                 (index as u32, txout)
             })
-            .find(|(_, txout)| txout.script_pubkey == compute_address.script_pubkey())
+            .find(|(_, txout)| txout.script_pubkey == address.script_pubkey())
             .map(|(vout, _txout)| OutPoint { txid, vout })
     })
     .await?;
@@ -88,7 +89,7 @@ where
 
 async fn watch<C, S, M>(
     connector: &C,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     sieve: S,
 ) -> anyhow::Result<(bitcoin::Transaction, M)>
 where
@@ -117,7 +118,7 @@ where
 }
 
 impl Predates for Block {
-    fn predates(&self, timestamp: NaiveDateTime) -> bool {
+    fn predates(&self, timestamp: DateTime<Utc>) -> bool {
         let unix_timestamp = timestamp.timestamp();
         let block_time = self.header.time as i64;
 

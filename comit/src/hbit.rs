@@ -1,6 +1,9 @@
 //! Htlc Bitcoin atomic swap protocol.
 
 use crate::{
+    actions::bitcoin::{
+        sign_with_fixed_rate, BroadcastSignedTransaction, SendToAddress, SpendOutput,
+    },
     asset,
     btsieve::{
         bitcoin::{watch_for_created_outpoint, watch_for_spent_outpoint},
@@ -12,10 +15,11 @@ use crate::{
 };
 use bitcoin::{
     hashes::{hash160, Hash},
+    secp256k1::{Secp256k1, SecretKey, Signing},
     Address, Block, BlockHash, Transaction,
 };
-use blockchain_contracts::bitcoin::rfc003::bitcoin_htlc::BitcoinHtlc;
-use chrono::NaiveDateTime;
+use blockchain_contracts::bitcoin::{hbit::Htlc, witness::UnlockParameters};
+use chrono::{DateTime, Utc};
 use futures::{
     future::{self, Either},
     Stream,
@@ -23,15 +27,6 @@ use futures::{
 use genawaiter::sync::{Co, Gen};
 use std::cmp::Ordering;
 use tracing_futures::Instrument;
-
-/// Data required to create a swap that involves Bitcoin.
-#[derive(Clone, Debug)]
-pub struct CreatedSwap {
-    pub amount: asset::Bitcoin,
-    pub final_identity: bitcoin::Address,
-    pub network: ledger::Bitcoin,
-    pub absolute_expiry: u32,
-}
 
 /// Represents the events in the hbit protocol.
 #[derive(Debug, Clone, PartialEq, strum_macros::Display)]
@@ -91,7 +86,7 @@ pub struct Refunded {
 pub fn new<'a, C>(
     connector: &'a C,
     params: Params,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
 ) -> impl Stream<Item = anyhow::Result<Event>> + 'a
 where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = BlockHash>,
@@ -108,7 +103,7 @@ where
 async fn watch_ledger<C, R>(
     connector: &C,
     params: Params,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     co: &Co<anyhow::Result<Event>, R>,
 ) -> anyhow::Result<()>
 where
@@ -146,10 +141,10 @@ where
     Ok(())
 }
 
-async fn watch_for_funded<C>(
+pub async fn watch_for_funded<C>(
     connector: &C,
     params: &Params,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
 ) -> anyhow::Result<Funded>
 where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = BlockHash>,
@@ -158,7 +153,7 @@ where
 
     let (transaction, location) =
         watch_for_created_outpoint(connector, start_of_swap, params.compute_address())
-            .instrument(tracing::info_span!("watch_fund"))
+            .instrument(tracing::info_span!("", action = "fund"))
             .await?;
 
     let asset = asset::Bitcoin::from_sat(transaction.output[location.vout as usize].value);
@@ -179,18 +174,18 @@ where
     Ok(event)
 }
 
-async fn watch_for_redeemed<C>(
+pub async fn watch_for_redeemed<C>(
     connector: &C,
     params: &Params,
     location: htlc_location::Bitcoin,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
 ) -> anyhow::Result<Redeemed>
 where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = BlockHash>,
 {
     let (transaction, _) =
         watch_for_spent_outpoint(connector, start_of_swap, location, params.redeem_identity)
-            .instrument(tracing::info_span!("watch_redeem"))
+            .instrument(tracing::info_span!("", action = "redeem"))
             .await?;
 
     let secret = extract_secret(&transaction, &params.secret_hash)
@@ -202,26 +197,26 @@ where
     })
 }
 
-async fn watch_for_refunded<C>(
+pub async fn watch_for_refunded<C>(
     connector: &C,
     params: &Params,
     location: htlc_location::Bitcoin,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
 ) -> anyhow::Result<Refunded>
 where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = BlockHash>,
 {
     let (transaction, _) =
         watch_for_spent_outpoint(connector, start_of_swap, location, params.refund_identity)
-            .instrument(tracing::info_span!("watch_refund"))
+            .instrument(tracing::info_span!("", action = "refund"))
             .await?;
 
     Ok(Refunded { transaction })
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Params {
-    pub network: bitcoin::Network,
+    pub network: ledger::Bitcoin,
     pub asset: asset::Bitcoin,
     pub redeem_identity: identity::Bitcoin,
     pub refund_identity: identity::Bitcoin,
@@ -229,7 +224,87 @@ pub struct Params {
     pub secret_hash: SecretHash,
 }
 
-impl From<Params> for BitcoinHtlc {
+impl Params {
+    pub fn build_fund_action(&self) -> SendToAddress {
+        let network = self.network;
+        let to = self.compute_address();
+        let amount = self.asset;
+
+        SendToAddress {
+            to,
+            amount,
+            network,
+        }
+    }
+
+    pub fn build_refund_action<C>(
+        &self,
+        secp: &Secp256k1<C>,
+        fund_amount: asset::Bitcoin,
+        fund_location: htlc_location::Bitcoin,
+        transient_refund_sk: SecretKey,
+        refund_address: Address,
+    ) -> anyhow::Result<BroadcastSignedTransaction>
+    where
+        C: Signing,
+    {
+        self.build_spend_action(&secp, fund_amount, fund_location, refund_address, |htlc| {
+            htlc.unlock_after_timeout(&secp, transient_refund_sk)
+        })
+    }
+
+    pub fn build_redeem_action<C>(
+        &self,
+        secp: &Secp256k1<C>,
+        fund_amount: asset::Bitcoin,
+        fund_location: htlc_location::Bitcoin,
+        transient_redeem_sk: SecretKey,
+        redeem_address: Address,
+        secret: Secret,
+    ) -> anyhow::Result<BroadcastSignedTransaction>
+    where
+        C: Signing,
+    {
+        self.build_spend_action(&secp, fund_amount, fund_location, redeem_address, |htlc| {
+            htlc.unlock_with_secret(secp, transient_redeem_sk, secret.into_raw_secret())
+        })
+    }
+
+    fn build_spend_action<C>(
+        &self,
+        secp: &Secp256k1<C>,
+        fund_amount: asset::Bitcoin,
+        fund_location: htlc_location::Bitcoin,
+        spend_address: Address,
+        unlock_fn: impl Fn(Htlc) -> UnlockParameters,
+    ) -> anyhow::Result<BroadcastSignedTransaction>
+    where
+        C: Signing,
+    {
+        let network = self.network;
+        let primed_transaction = {
+            let htlc = build_bitcoin_htlc(
+                self.redeem_identity,
+                self.refund_identity,
+                self.expiry,
+                self.secret_hash,
+            );
+            let input_parameters = unlock_fn(htlc);
+            let spend_output =
+                SpendOutput::new(fund_location, fund_amount, input_parameters, network);
+
+            spend_output.spend_to(spend_address)
+        };
+        let transaction = sign_with_fixed_rate(&secp, primed_transaction)?;
+
+        Ok(BroadcastSignedTransaction {
+            transaction,
+            network,
+        })
+    }
+}
+
+impl From<Params> for Htlc {
     fn from(params: Params) -> Self {
         build_bitcoin_htlc(
             params.redeem_identity,
@@ -242,7 +317,7 @@ impl From<Params> for BitcoinHtlc {
 
 impl Params {
     pub fn compute_address(&self) -> Address {
-        BitcoinHtlc::from(*self).compute_address(self.network)
+        Htlc::from(*self).compute_address(self.network.into())
     }
 }
 
@@ -263,14 +338,14 @@ pub fn build_bitcoin_htlc(
     refund_identity: identity::Bitcoin,
     expiry: Timestamp,
     secret_hash: SecretHash,
-) -> BitcoinHtlc {
+) -> Htlc {
     let refund_public_key = ::bitcoin::PublicKey::from(refund_identity);
     let redeem_public_key = ::bitcoin::PublicKey::from(redeem_identity);
 
     let refund_identity = hash160::Hash::hash(&refund_public_key.key.serialize());
     let redeem_identity = hash160::Hash::hash(&redeem_public_key.key.serialize());
 
-    BitcoinHtlc::new(
+    Htlc::new(
         expiry.into(),
         refund_identity,
         redeem_identity,

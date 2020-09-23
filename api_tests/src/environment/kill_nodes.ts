@@ -1,9 +1,9 @@
 import glob from "glob";
-import { rimrafAsync } from "../utils";
 import { promisify } from "util";
 import processExists from "process-exists";
 import path from "path";
 import { promises as asyncFs } from "fs";
+import { rimrafAsync } from "./async_fs";
 
 const globAsync = promisify(glob);
 
@@ -22,7 +22,11 @@ export default async function killNodes(locksDir: any) {
             process.stderr.write(
                 `Found pid file ${pidFile}, sending SIGINT to process with PID ${pid}\n`
             );
-            process.kill(pid, "SIGTERM");
+            try {
+                process.kill(pid, "SIGTERM");
+            } catch (e) {
+                process.stderr.write(`Failed to kill process ${pid}\n`);
+            }
         }
     }
 

@@ -1,19 +1,20 @@
 //! Htlc ERC20 Token atomic swap protocol.
 
 use crate::{
-    asset,
+    actions, asset,
     asset::{ethereum::FromWei, Erc20, Erc20Quantity},
     btsieve::{
         ethereum::{watch_for_contract_creation, watch_for_event, ReceiptByHash, Topic},
         BlockByHash, LatestBlock,
     },
-    ethereum::{Block, Bytes, ChainId, Hash, U256},
+    ethereum::{Block, ChainId, Hash, U256},
     htlc_location, identity,
     timestamp::Timestamp,
     transaction, Secret, SecretHash,
 };
-use blockchain_contracts::ethereum::rfc003::Erc20Htlc;
-use chrono::NaiveDateTime;
+use blockchain_contracts::ethereum::herc20::Htlc;
+use chrono::{DateTime, Utc};
+use conquer_once::Lazy;
 use futures::{
     future::{self, Either},
     Stream,
@@ -22,20 +23,21 @@ use genawaiter::sync::{Co, Gen};
 use std::cmp::Ordering;
 use tracing_futures::Instrument;
 
-lazy_static::lazy_static! {
-    static ref REDEEM_LOG_MSG: Hash = blockchain_contracts::ethereum::rfc003::REDEEMED_LOG_MSG.parse().expect("to be valid hex");
-    static ref REFUND_LOG_MSG: Hash = blockchain_contracts::ethereum::rfc003::REFUNDED_LOG_MSG.parse().expect("to be valid hex");
-    static ref TRANSFER_LOG_MSG: Hash = blockchain_contracts::ethereum::rfc003::ERC20_TRANSFER.parse().expect("to be valid hex");
-}
-
-/// Data required to create a swap that involves an ERC20 token.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CreatedSwap {
-    pub asset: asset::Erc20,
-    pub identity: identity::Ethereum,
-    pub chain_id: ChainId,
-    pub absolute_expiry: u32,
-}
+static REDEEM_LOG_MSG: Lazy<Hash> = Lazy::new(|| {
+    blockchain_contracts::ethereum::REDEEMED_LOG_MSG
+        .parse()
+        .expect("to be valid hex")
+});
+static REFUND_LOG_MSG: Lazy<Hash> = Lazy::new(|| {
+    blockchain_contracts::ethereum::REFUNDED_LOG_MSG
+        .parse()
+        .expect("to be valid hex")
+});
+static TRANSFER_LOG_MSG: Lazy<Hash> = Lazy::new(|| {
+    blockchain_contracts::ethereum::ERC20_TRANSFER
+        .parse()
+        .expect("to be valid hex")
+});
 
 /// Represents the events in the herc20 protocol.
 #[derive(Debug, Clone, PartialEq, strum_macros::Display)]
@@ -94,7 +96,7 @@ pub struct Refunded {
 pub fn new<'a, C>(
     connector: &'a C,
     params: Params,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
 ) -> impl Stream<Item = anyhow::Result<Event>> + 'a
 where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = Hash> + ReceiptByHash,
@@ -111,7 +113,7 @@ where
 async fn watch_ledger<C, R>(
     connector: &C,
     params: Params,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     co: &Co<anyhow::Result<Event>, R>,
 ) -> anyhow::Result<()>
 where
@@ -148,10 +150,10 @@ where
     Ok(())
 }
 
-async fn watch_for_deployed<C>(
+pub async fn watch_for_deployed<C>(
     connector: &C,
     params: Params,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
 ) -> anyhow::Result<Deployed>
 where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = Hash> + ReceiptByHash,
@@ -160,10 +162,7 @@ where
 
     let (transaction, location) =
         watch_for_contract_creation(connector, start_of_swap, &expected_bytecode)
-            .instrument(tracing::trace_span!(
-                "watch_deploy",
-                expected_bytecode = %hex::encode(&expected_bytecode.0)
-            ))
+            .instrument(tracing::info_span!("", action = "deploy"))
             .await?;
 
     Ok(Deployed {
@@ -172,10 +171,10 @@ where
     })
 }
 
-async fn watch_for_funded<C>(
+pub async fn watch_for_funded<C>(
     connector: &C,
     params: Params,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     deployed: Deployed,
 ) -> anyhow::Result<Funded>
 where
@@ -193,12 +192,12 @@ where
     };
 
     let (transaction, log) = watch_for_event(connector, start_of_swap, event)
-        .instrument(tracing::trace_span!("watch_fund"))
+        .instrument(tracing::info_span!("", action = "fund"))
         .await?;
 
     let expected_asset = &params.asset;
 
-    let quantity = Erc20Quantity::from_wei(U256::from_big_endian(log.data.0.as_ref()));
+    let quantity = Erc20Quantity::from_wei(U256::from_big_endian(&log.data));
     let asset = Erc20::new(log.address, quantity);
 
     let event = match expected_asset.cmp(&asset) {
@@ -209,9 +208,9 @@ where
     Ok(event)
 }
 
-async fn watch_for_redeemed<C>(
+pub async fn watch_for_redeemed<C>(
     connector: &C,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     deployed: Deployed,
 ) -> anyhow::Result<Redeemed>
 where
@@ -225,12 +224,11 @@ where
     };
 
     let (transaction, log) = watch_for_event(connector, start_of_swap, event)
-        .instrument(tracing::info_span!("watch_redeem"))
+        .instrument(tracing::info_span!("", action = "redeem"))
         .await?;
 
-    let log_data = log.data.0.as_ref();
     let secret =
-        Secret::from_vec(log_data).expect("Must be able to construct secret from log data");
+        Secret::from_vec(&log.data).expect("Must be able to construct secret from log data");
 
     Ok(Redeemed {
         transaction,
@@ -238,9 +236,9 @@ where
     })
 }
 
-async fn watch_for_refunded<C>(
+pub async fn watch_for_refunded<C>(
     connector: &C,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     deployed: Deployed,
 ) -> anyhow::Result<Refunded>
 where
@@ -254,35 +252,106 @@ where
     };
 
     let (transaction, _) = watch_for_event(connector, start_of_swap, event)
-        .instrument(tracing::info_span!("watch_refund"))
+        .instrument(tracing::info_span!("", action = "refund"))
         .await?;
 
     Ok(Refunded { transaction })
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Params {
     pub asset: asset::Erc20,
     pub redeem_identity: identity::Ethereum,
     pub refund_identity: identity::Ethereum,
     pub expiry: Timestamp,
     pub secret_hash: SecretHash,
+    pub chain_id: ChainId,
 }
 
 impl Params {
-    pub fn bytecode(&self) -> Bytes {
-        Erc20Htlc::from(self.clone()).into()
+    pub fn bytecode(&self) -> Vec<u8> {
+        Htlc::from(self.clone()).into()
+    }
+
+    pub fn build_deploy_action(&self) -> actions::ethereum::DeployContract {
+        let chain_id = self.chain_id;
+        let htlc = Htlc::from(self.clone());
+        let gas_limit = Htlc::deploy_tx_gas_limit();
+
+        actions::ethereum::DeployContract {
+            data: htlc.into(),
+            amount: asset::Ether::zero(),
+            gas_limit,
+            chain_id,
+        }
+    }
+
+    pub fn build_fund_action(
+        &self,
+        htlc_location: htlc_location::Ethereum,
+    ) -> actions::ethereum::CallContract {
+        let to = self.asset.token_contract;
+        let htlc_address = blockchain_contracts::ethereum::Address(htlc_location.into());
+        let data =
+            Htlc::transfer_erc20_tx_payload(self.asset.clone().quantity.into(), htlc_address);
+        let data = Some(data);
+
+        let gas_limit = Htlc::fund_tx_gas_limit();
+        let min_block_timestamp = None;
+
+        actions::ethereum::CallContract {
+            to,
+            data,
+            gas_limit,
+            chain_id: self.chain_id,
+            min_block_timestamp,
+        }
+    }
+
+    pub fn build_refund_action(
+        &self,
+        htlc_location: htlc_location::Ethereum,
+    ) -> actions::ethereum::CallContract {
+        let data = None;
+        let gas_limit = Htlc::refund_tx_gas_limit();
+        let min_block_timestamp = Some(self.expiry);
+
+        actions::ethereum::CallContract {
+            to: htlc_location,
+            data,
+            gas_limit,
+            chain_id: self.chain_id,
+            min_block_timestamp,
+        }
+    }
+
+    pub fn build_redeem_action(
+        &self,
+        htlc_location: htlc_location::Ethereum,
+        secret: Secret,
+    ) -> actions::ethereum::CallContract {
+        let data = Some(secret.into_raw_secret().to_vec());
+        let gas_limit = Htlc::redeem_tx_gas_limit();
+        let min_block_timestamp = None;
+
+        actions::ethereum::CallContract {
+            to: htlc_location,
+            data,
+            gas_limit,
+            chain_id: self.chain_id,
+            min_block_timestamp,
+        }
     }
 }
 
-impl From<Params> for Erc20Htlc {
+impl From<Params> for Htlc {
     fn from(params: Params) -> Self {
         let refund_address = blockchain_contracts::ethereum::Address(params.refund_identity.into());
         let redeem_address = blockchain_contracts::ethereum::Address(params.redeem_identity.into());
         let token_contract_address =
             blockchain_contracts::ethereum::Address(params.asset.token_contract.into());
 
-        Erc20Htlc::new(
+        Htlc::new(
             params.expiry.into(),
             refund_address,
             redeem_address,
@@ -299,13 +368,13 @@ pub fn build_erc20_htlc(
     refund_identity: identity::Ethereum,
     expiry: Timestamp,
     secret_hash: SecretHash,
-) -> Erc20Htlc {
+) -> Htlc {
     let refund_address = blockchain_contracts::ethereum::Address(refund_identity.into());
     let redeem_address = blockchain_contracts::ethereum::Address(redeem_identity.into());
     let token_contract_address =
         blockchain_contracts::ethereum::Address(asset.token_contract.into());
 
-    Erc20Htlc::new(
+    Htlc::new(
         expiry.into(),
         refund_address,
         redeem_address,

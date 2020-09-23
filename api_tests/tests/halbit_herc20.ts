@@ -3,22 +3,16 @@
  * @ledger ethereum
  */
 
-import SwapFactory from "../src/actors/swap_factory";
+import SwapFactory from "../src/swap_factory";
 import { sleep } from "../src/utils";
-import { twoActorTest } from "../src/actor_test";
+import { startAliceAndBob } from "../src/actor_test";
 
 describe("halbit-herc20", () => {
     it(
         "halbit-herc20-alice-redeems-bob-redeems",
-        twoActorTest(async ({ alice, bob }) => {
-            const bodies = (
-                await SwapFactory.newSwap(alice, bob, {
-                    ledgers: {
-                        alpha: "lightning",
-                        beta: "ethereum",
-                    },
-                })
-            ).halbitHerc20;
+        startAliceAndBob(async ([alice, bob]) => {
+            const bodies = (await SwapFactory.newSwap(alice, bob)).halbitHerc20;
+            await alice.openLnChannel(bob, bodies.alice.alpha.amount * 2n);
 
             await alice.createHalbitHerc20Swap(bodies.alice);
             await bob.createHalbitHerc20Swap(bodies.bob);
@@ -43,16 +37,13 @@ describe("halbit-herc20", () => {
 
     it(
         "halbit-herc20-bob-refunds",
-        twoActorTest(async ({ alice, bob }) => {
+        startAliceAndBob(async ([alice, bob]) => {
             const bodies = (
                 await SwapFactory.newSwap(alice, bob, {
-                    ledgers: {
-                        alpha: "lightning",
-                        beta: "ethereum",
-                    },
                     instantRefund: true,
                 })
             ).halbitHerc20;
+            await alice.openLnChannel(bob, bodies.alice.alpha.amount * 2n);
 
             await alice.createHalbitHerc20Swap(bodies.alice);
             await bob.createHalbitHerc20Swap(bodies.bob);

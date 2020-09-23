@@ -11,28 +11,28 @@ pub trait Actions {
 }
 
 pub mod bitcoin {
-    use crate::asset;
+    use crate::{asset, ledger};
     use bitcoin::{
         secp256k1::{self, Secp256k1},
         OutPoint,
     };
     use blockchain_contracts::bitcoin::witness::PrimedInput;
 
-    pub use bitcoin::{Address, Amount, Network, Transaction};
+    pub use bitcoin::{Address, Amount, Transaction};
     pub use blockchain_contracts::bitcoin::witness::{PrimedTransaction, UnlockParameters};
 
     #[derive(Debug, Clone, PartialEq)]
     pub struct SendToAddress {
         pub to: Address,
         pub amount: asset::Bitcoin,
-        pub network: bitcoin::Network,
+        pub network: ledger::Bitcoin,
     }
 
     #[derive(Debug, Clone, PartialEq)]
     pub struct SpendOutput {
         // Remember: One man's input is another man's output!
         pub output: PrimedInput,
-        pub network: bitcoin::Network,
+        pub network: ledger::Bitcoin,
     }
 
     impl SpendOutput {
@@ -40,7 +40,7 @@ pub mod bitcoin {
             previous_output: OutPoint,
             value: Amount,
             input_parameters: UnlockParameters,
-            network: Network,
+            network: ledger::Bitcoin,
         ) -> Self {
             Self {
                 output: PrimedInput::new(previous_output, value, input_parameters),
@@ -72,20 +72,16 @@ pub mod bitcoin {
     #[derive(Debug, Clone, PartialEq)]
     pub struct BroadcastSignedTransaction {
         pub transaction: Transaction,
-        pub network: bitcoin::Network,
+        pub network: ledger::Bitcoin,
     }
 }
 
 pub mod ethereum {
-    use crate::{
-        asset,
-        ethereum::{Bytes, ChainId},
-        identity, Timestamp,
-    };
+    use crate::{asset, ethereum::ChainId, identity, Timestamp};
 
     #[derive(Debug, Clone, PartialEq)]
     pub struct DeployContract {
-        pub data: Bytes,
+        pub data: Vec<u8>,
         pub amount: asset::Ether,
         pub gas_limit: u64,
         pub chain_id: ChainId,
@@ -94,7 +90,7 @@ pub mod ethereum {
     #[derive(Debug, Clone, PartialEq)]
     pub struct CallContract {
         pub to: identity::Ethereum,
-        pub data: Option<Bytes>,
+        pub data: Option<Vec<u8>>,
         pub gas_limit: u64,
         pub chain_id: ChainId,
         pub min_block_timestamp: Option<Timestamp>,
@@ -102,7 +98,8 @@ pub mod ethereum {
 }
 
 pub mod lnd {
-    use crate::{asset, identity, timestamp::RelativeTime, Secret, SecretHash};
+    use crate::{asset, identity, ledger, timestamp::RelativeTime, Secret, SecretHash};
+    use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct AddHoldInvoice {
@@ -111,7 +108,7 @@ pub mod lnd {
         pub expiry: RelativeTime, // The invoice's expiry
         pub cltv_expiry: RelativeTime,
         pub chain: Chain,
-        pub network: bitcoin::Network,
+        pub network: ledger::Bitcoin,
         pub self_public_key: identity::Lightning,
     }
 
@@ -119,7 +116,7 @@ pub mod lnd {
     pub struct SettleInvoice {
         pub secret: Secret,
         pub chain: Chain,
-        pub network: bitcoin::Network,
+        pub network: ledger::Bitcoin,
         pub self_public_key: identity::Lightning,
     }
 
@@ -127,7 +124,7 @@ pub mod lnd {
     pub struct CancelInvoice {
         pub secret_hash: SecretHash, // The hash of the preimage used when adding the invoice.
         pub chain: Chain,
-        pub network: bitcoin::Network,
+        pub network: ledger::Bitcoin,
         pub self_public_key: identity::Lightning,
     }
 
@@ -138,12 +135,13 @@ pub mod lnd {
         pub secret_hash: SecretHash, // The hash to use within the payment's HTLC.
         pub final_cltv_delta: RelativeTime,
         pub chain: Chain,
-        pub network: bitcoin::Network,
+        pub network: ledger::Bitcoin,
         pub self_public_key: identity::Lightning,
     }
 
     /// The underlying chain i.e., layer 1, targeted by LND.
-    #[derive(Debug, Clone, Copy, PartialEq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
     pub enum Chain {
         Bitcoin,
     }

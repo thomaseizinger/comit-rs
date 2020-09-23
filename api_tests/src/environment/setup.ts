@@ -1,7 +1,7 @@
-import { rimrafAsync } from "../utils";
 import { promises as asyncFs } from "fs";
 import path from "path";
 import killNodes from "./kill_nodes";
+import { rimrafAsync } from "./async_fs";
 
 export default async (config: any) => {
     const root = config.rootDir;
@@ -17,7 +17,7 @@ export default async (config: any) => {
     await killNodes(locksDir);
     await asyncFs.mkdir(locksDir, { recursive: true });
 
-    process.on("SIGINT", () => {
+    process.once("SIGINT", () => {
         process.stderr.write("SIGINT caught, cleaning up environment ...\n");
 
         // tslint:disable-next-line:no-floating-promises cannot await in a signal listener

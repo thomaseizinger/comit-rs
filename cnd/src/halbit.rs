@@ -1,8 +1,6 @@
 use crate::{
-    identity,
-    swap_protocols::{state, state::Update},
-    tracing_ext::InstrumentProtocol,
-    LocalSwapId, Protocol, RelativeTime, Role, Side,
+    asset, identity, ledger, state, state::Update, tracing_ext::InstrumentProtocol, LocalSwapId,
+    LockProtocol, RelativeTime, Role, Side,
 };
 use futures::TryStreamExt;
 use std::{
@@ -115,7 +113,7 @@ pub async fn new<C>(
     C: WaitForOpened + WaitForAccepted + WaitForSettled + WaitForCancelled,
 {
     let mut events = comit::halbit::new(&connector, params)
-        .instrument_protocol(id, role, side, Protocol::Halbit)
+        .instrument_protocol(id, role, side, LockProtocol::Halbit)
         .inspect_ok(|event| tracing::info!("yielded event {}", event))
         .inspect_err(|error| tracing::error!("swap failed with {:?}", error));
 
@@ -124,6 +122,16 @@ pub async fn new<C>(
     }
 
     tracing::info!("swap finished");
+}
+
+/// Data required to create a swap that involves bitcoin on the lightning
+/// network.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CreatedSwap {
+    pub asset: asset::Bitcoin,
+    pub identity: identity::Lightning,
+    pub network: ledger::Bitcoin,
+    pub cltv_expiry: u32,
 }
 
 /// Represents states that an invoice can be in.

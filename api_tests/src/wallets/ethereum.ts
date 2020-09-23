@@ -1,241 +1,216 @@
-import { EthereumWallet as EthereumWalletSdk } from "comit-sdk";
-import { ethers } from "ethers";
-import { BigNumber as BigNumberEthers } from "ethers/utils";
-import { Wallet } from "./index";
-import { TransactionRequest } from "ethers/providers";
-import { sleep } from "../utils";
+import { BigNumber, Contract, ethers } from "ethers";
 import { Logger } from "log4js";
-import { lock } from "proper-lockfile";
-import { Asset } from "../asset";
+import erc20 from "../../ethereum_abi/erc20.json";
+import { EventFragment, FunctionFragment } from "ethers/lib/utils";
 
-export class EthereumWallet implements Wallet {
-    public MaximumFee = 0;
+export interface EthereumWallet {
+    getAccount(): string;
+    deployErc20TokenContract(): Promise<string>;
+    deployContract(
+        data: string,
+        amount: BigNumber,
+        gasLimit: string,
+        chainId: number
+    ): Promise<ethers.providers.TransactionReceipt>;
+    callContract(
+        data: string,
+        contractAddress: string,
+        gasLimit: string,
+        chainId: number
+    ): Promise<ethers.providers.TransactionReceipt>;
+    assertNetwork(expectedChainId: number): Promise<void>;
+    getErc20Balance(contractAddress: string): Promise<bigint>;
+    mintErc20(quantity: bigint, tokenContract: string): Promise<void>;
+}
 
+export class Web3EthereumWallet implements EthereumWallet {
     private constructor(
-        private readonly ethereumDevAccount: ethers.Wallet,
+        private readonly wallet: ethers.Wallet,
         private readonly logger: Logger,
-        private readonly ethereumLockDir: string,
-        private readonly jsonRpcProvider: ethers.providers.JsonRpcProvider,
-        public readonly inner: EthereumWalletSdk,
-        public readonly chainId: number
+        private readonly provider: ethers.providers.JsonRpcProvider,
+        public readonly chainId: number,
+        private readonly devAccount: string
     ) {}
 
-    public static async new_instance(
-        devAccountKey: string,
+    public static async newInstance(
         rpcUrl: string,
         logger: Logger,
-        ethereumLockDir: string,
-        chainId: number
+        chainId: number,
+        devAccount: string
     ) {
-        const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
-
-        const ethereumDevAccount = await ethers.Wallet.fromEncryptedJson(
-            devAccountKey,
-            ""
-        );
-        const inner = new EthereumWalletSdk(rpcUrl);
-        return new EthereumWallet(
-            ethereumDevAccount,
+        return new Web3EthereumWallet(
+            ethers.Wallet.createRandom(),
             logger,
-            ethereumLockDir,
-            provider,
-            inner,
-            chainId
+            new ethers.providers.JsonRpcProvider(rpcUrl),
+            chainId,
+            devAccount
         );
     }
 
-    public async mint(asset: Asset): Promise<void> {
-        switch (asset.name) {
-            case "ether":
-                return this.mintEther(asset);
-            case "erc20":
-                return this.mintErc20(asset);
-            default:
-                throw new Error(
-                    `Cannot mint asset ${asset.name} with EthereumWallet`
-                );
-        }
-    }
-
-    private async mintErc20(asset: Asset): Promise<void> {
-        let toAddress = this.inner.getAccount();
+    public async mintErc20(
+        quantity: bigint,
+        tokenContract: string
+    ): Promise<void> {
+        let toAddress = this.getAccount();
 
         const functionIdentifier = "40c10f19";
         toAddress = toAddress.replace(/^0x/, "").padStart(64, "0");
 
-        const bigNumber = ethers.utils.bigNumberify(asset.quantity);
+        const bigNumber = ethers.BigNumber.from(quantity);
         const hexAmount = bigNumber
             .toHexString()
             .replace(/^0x/, "")
             .padStart(64, "0");
         const data = "0x" + functionIdentifier + toAddress + hexAmount;
 
-        const tx: TransactionRequest = {
-            to: asset.tokenContract,
+        const tx: ethers.providers.TransactionRequest = {
+            to: tokenContract,
             gasLimit: "0x100000",
             value: "0x0",
             data,
         };
 
-        await this.sendTransaction(tx);
+        await this.sendDevAccountTransaction(tx);
 
         this.logger.info(
             "Minted",
-            asset.quantity,
+            quantity,
             "erc20 tokens (",
-            asset.tokenContract,
+            tokenContract,
             ") for",
             toAddress
         );
     }
 
-    private async sendTransaction(tx: TransactionRequest) {
-        const release = await lock(this.ethereumLockDir, {
-            retries: {
-                retries: 10,
-                minTimeout: 50,
-                maxTimeout: 2000,
-            },
-            lockfilePath: "ethereum-dev-account",
-        });
+    private async sendDevAccountTransaction(
+        tx: ethers.providers.TransactionRequest
+    ): Promise<ethers.providers.TransactionReceipt> {
+        const signer = this.provider.getSigner(this.devAccount);
+        const response = await signer.sendTransaction(tx);
 
+        return this.assertSuccessful(response);
+    }
+
+    private async assertSuccessful(
+        transactionResponse: ethers.providers.TransactionResponse
+    ) {
         this.logger.debug(
-            "Acquired lock for ethereum-dev-account, sending transaction ",
-            tx
+            "Transaction: ",
+            transactionResponse.hash,
+            " sent, waiting to be confirmed."
         );
 
-        try {
-            tx.nonce = await this.jsonRpcProvider.getTransactionCount(
-                this.ethereumDevAccount.address
+        const transactionReceipt = await this.provider.waitForTransaction(
+            transactionResponse.hash,
+            1
+        );
+        if (transactionReceipt.status === 0) {
+            throw new Error(
+                `Transaction ${transactionReceipt.transactionHash} failed`
             );
-            const signedTx = await this.ethereumDevAccount.sign(tx);
-            const transactionResponse = await this.jsonRpcProvider.sendTransaction(
-                signedTx
-            );
-
-            this.logger.debug(
-                "Transaction: ",
-                transactionResponse.hash,
-                " sent, waiting to be confirmed."
-            );
-
-            const transactionReceipt = await this.jsonRpcProvider.waitForTransaction(
-                transactionResponse.hash,
-                1
-            );
-            if (!transactionReceipt.status) {
-                throw new Error(
-                    `Transaction ${transactionReceipt.transactionHash} failed with status 1`
-                );
-            }
-            this.logger.debug(
-                "Transaction: ",
-                transactionReceipt.transactionHash,
-                " confirmed in block: ",
-                transactionReceipt.blockHash
-            );
-            return transactionReceipt;
-        } finally {
-            await release();
         }
+        this.logger.debug(
+            "Transaction: ",
+            transactionReceipt.transactionHash,
+            " confirmed in block: ",
+            transactionReceipt.blockHash
+        );
 
-        this.logger.debug("Lock for ethereum-dev-account account released.");
+        return transactionReceipt;
     }
 
-    private async mintEther(asset: Asset): Promise<void> {
-        const minimumExpectedBalance = BigInt(asset.quantity);
-
-        // make sure we have at least twice as much
-        const value = new BigNumberEthers(
-            minimumExpectedBalance.toString()
-        ).mul(2);
-        await this.sendTransaction({
-            to: this.account(),
-            value,
-            gasLimit: 21000,
-            chainId: this.chainId,
+    private async signAndSend(tx: ethers.providers.TransactionRequest) {
+        const nonce = await this.provider.getTransactionCount(
+            this.wallet.address
+        );
+        const signedTx = await this.wallet.signTransaction({
+            ...tx,
+            nonce,
         });
 
-        const balance = await this.getBalanceByAsset(asset);
-
-        if (balance <= minimumExpectedBalance) {
-            throw new Error("Failed to mint Ether");
-        }
-
-        this.logger.info("Minted", asset.quantity, "ether for", this.account());
-    }
-
-    public account(): string {
-        return this.inner.getAccount();
+        return this.provider.sendTransaction(signedTx);
     }
 
     public async deployErc20TokenContract(): Promise<string> {
         const data = ERC20_CONTRACT;
 
-        const tx: TransactionRequest = {
+        const tx: ethers.providers.TransactionRequest = {
             gasLimit: "0x3D0900",
             value: "0x0",
             data,
-            nonce: await this.jsonRpcProvider.getTransactionCount(
-                this.ethereumDevAccount.address
-            ),
             chainId: this.chainId,
         };
-        const signedTx = await this.ethereumDevAccount.sign(tx);
-        const transactionResponse = await this.jsonRpcProvider.sendTransaction(
-            signedTx
-        );
-        const transactionReceipt = await this.jsonRpcProvider.waitForTransaction(
-            transactionResponse.hash,
+
+        const transactionResponse = await this.sendDevAccountTransaction(tx);
+
+        const transactionReceipt = await this.provider.waitForTransaction(
+            transactionResponse.transactionHash,
             1
         );
         return transactionReceipt.contractAddress;
     }
 
-    public async getBalanceByAsset(asset: Asset): Promise<bigint> {
-        let balance = BigInt(0);
-        switch (asset.name) {
-            case "ether":
-                balance = await this.inner
-                    .getBalance()
-                    .then((balance) => BigInt(balance.toString()));
-                break;
-            case "erc20":
-                balance = await this.inner
-                    .getErc20Balance(asset.tokenContract, 0)
-                    .then((balance) => BigInt(balance.toString(10)));
-                break;
-            default:
-                throw new Error(
-                    `Cannot read balance for asset ${asset.name} with EthereumWallet`
-                );
+    public getAccount(): string {
+        return this.wallet.address;
+    }
+
+    public async getEtherBalance(): Promise<bigint> {
+        return this.wallet
+            .getBalance()
+            .then((balance) => BigInt(balance.toString()));
+    }
+
+    public async getErc20Balance(contractAddress: string): Promise<bigint> {
+        const abi = erc20 as (FunctionFragment | EventFragment)[];
+        const contract = new Contract(contractAddress, abi, this.provider);
+
+        const strBalance = await contract.balanceOf(this.getAccount());
+        const intBalance = BigNumber.from(strBalance);
+
+        return BigInt(intBalance.toString());
+    }
+
+    async deployContract(
+        data: string,
+        amount: BigNumber,
+        gasLimit: string,
+        chainId: number
+    ): Promise<ethers.providers.TransactionReceipt> {
+        await this.assertNetwork(chainId);
+        const value = BigNumber.from(amount.toString());
+        const response = await this.signAndSend({
+            data,
+            value,
+            gasLimit,
+        });
+
+        return this.assertSuccessful(response);
+    }
+
+    async callContract(
+        data: string,
+        contractAddress: string,
+        gasLimit: string,
+        chainId: number
+    ): Promise<ethers.providers.TransactionReceipt> {
+        await this.assertNetwork(chainId);
+        const response = await this.signAndSend({
+            data,
+            to: contractAddress,
+            gasLimit,
+        });
+
+        return this.assertSuccessful(response);
+    }
+
+    async assertNetwork(expectedChainId: number): Promise<void> {
+        const actualNetwork = await this.provider.getNetwork();
+
+        if (actualNetwork.chainId !== expectedChainId) {
+            return Promise.reject(
+                `This wallet is connected to the chain with chainId: ${expectedChainId}  and cannot perform actions on chain with chainId ${actualNetwork.chainId}`
+            );
         }
-        return balance;
-    }
-
-    public async getBlockchainTime(): Promise<number> {
-        const block = await this.jsonRpcProvider.send("eth_getBlockByNumber", [
-            "latest",
-            false,
-        ]);
-
-        return block.timestamp;
-    }
-
-    public async getTransactionStatus(txid: string): Promise<number> {
-        let transaction = await this.jsonRpcProvider.getTransaction(txid);
-
-        // Note that TransactionResponse.wait throws an Error if the transaction is failed
-        // Hence we are going for a more manual method.
-        do {
-            await sleep(100);
-            transaction = await this.jsonRpcProvider.getTransaction(txid);
-        } while (transaction.confirmations === 0);
-
-        const transactionReceipt = await this.jsonRpcProvider.getTransactionReceipt(
-            txid
-        );
-        return transactionReceipt.status;
     }
 }
 

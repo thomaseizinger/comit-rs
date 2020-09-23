@@ -3,25 +3,18 @@
  * @ledger bitcoin
  */
 
-import SwapFactory from "../src/actors/swap_factory";
+import { startConnectedAliceAndBob } from "../src/actor_test";
 import { sleep } from "../src/utils";
-import { twoActorTest } from "../src/actor_test";
+import { Position } from "../src/cnd_client/payload";
 
 describe("herc20-hbit-respawn", () => {
     it(
         "herc20-hbit-alice-misses-bob-funds",
-        twoActorTest(async ({ alice, bob }) => {
-            const bodies = (
-                await SwapFactory.newSwap(alice, bob, {
-                    ledgers: {
-                        alpha: "ethereum",
-                        beta: "bitcoin",
-                    },
-                })
-            ).herc20Hbit;
+        startConnectedAliceAndBob(async ([alice, bob]) => {
+            await alice.makeBtcDaiOrder(Position.Buy, 0.2, 9000);
+            await bob.makeBtcDaiOrder(Position.Sell, 0.2, 9000);
 
-            await alice.createHerc20HbitSwap(bodies.alice);
-            await bob.createHerc20HbitSwap(bodies.bob);
+            await Promise.all([alice.waitForSwap(), bob.waitForSwap()]);
 
             await alice.assertAndExecuteNextAction("deploy");
             await alice.assertAndExecuteNextAction("fund");
@@ -47,18 +40,11 @@ describe("herc20-hbit-respawn", () => {
 
     it(
         "herc20-hbit-bob-misses-alice-redeems",
-        twoActorTest(async ({ alice, bob }) => {
-            const bodies = (
-                await SwapFactory.newSwap(alice, bob, {
-                    ledgers: {
-                        alpha: "ethereum",
-                        beta: "bitcoin",
-                    },
-                })
-            ).herc20Hbit;
+        startConnectedAliceAndBob(async ([alice, bob]) => {
+            await alice.makeBtcDaiOrder(Position.Buy, 0.2, 9000);
+            await bob.makeBtcDaiOrder(Position.Sell, 0.2, 9000);
 
-            await alice.createHerc20HbitSwap(bodies.alice);
-            await bob.createHerc20HbitSwap(bodies.bob);
+            await Promise.all([alice.waitForSwap(), bob.waitForSwap()]);
 
             await alice.assertAndExecuteNextAction("deploy");
             await alice.assertAndExecuteNextAction("fund");
@@ -85,18 +71,11 @@ describe("herc20-hbit-respawn", () => {
 
     it(
         "hbit-herc20-alice-misses-bob-deploys-and-funds",
-        twoActorTest(async ({ alice, bob }) => {
-            const bodies = (
-                await SwapFactory.newSwap(alice, bob, {
-                    ledgers: {
-                        alpha: "bitcoin",
-                        beta: "ethereum",
-                    },
-                })
-            ).hbitHerc20;
+        startConnectedAliceAndBob(async ([alice, bob]) => {
+            await alice.makeBtcDaiOrder(Position.Sell, 0.2, 9000);
+            await bob.makeBtcDaiOrder(Position.Buy, 0.2, 9000);
 
-            await alice.createHbitHerc20Swap(bodies.alice);
-            await bob.createHbitHerc20Swap(bodies.bob);
+            await Promise.all([alice.waitForSwap(), bob.waitForSwap()]);
 
             await alice.assertAndExecuteNextAction("fund");
 
@@ -122,18 +101,11 @@ describe("herc20-hbit-respawn", () => {
 
     it(
         "hbit-herc20-bob-down-misses-alice-redeems",
-        twoActorTest(async ({ alice, bob }) => {
-            const bodies = (
-                await SwapFactory.newSwap(alice, bob, {
-                    ledgers: {
-                        alpha: "bitcoin",
-                        beta: "ethereum",
-                    },
-                })
-            ).hbitHerc20;
+        startConnectedAliceAndBob(async ([alice, bob]) => {
+            await alice.makeBtcDaiOrder(Position.Sell, 0.2, 9000);
+            await bob.makeBtcDaiOrder(Position.Buy, 0.2, 9000);
 
-            await alice.createHbitHerc20Swap(bodies.alice);
-            await bob.createHbitHerc20Swap(bodies.bob);
+            await Promise.all([alice.waitForSwap(), bob.waitForSwap()]);
 
             await alice.assertAndExecuteNextAction("fund");
 

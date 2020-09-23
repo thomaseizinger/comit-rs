@@ -1,24 +1,11 @@
-import { HarnessGlobal, sleep } from "../utils";
 import { BitcoinWallet } from "./bitcoin";
 import { EthereumWallet } from "./ethereum";
-import { LightningWallet } from "./lightning";
-import { Logger } from "log4js";
-import { ActorName } from "../actors/actor";
-import { Asset } from "../asset";
+import { LightningChannel, LndClient } from "./lightning";
 
-declare var global: HarnessGlobal;
-
-interface AllWallets {
+export interface AllWallets {
     bitcoin?: BitcoinWallet;
     ethereum?: EthereumWallet;
-    lightning?: LightningWallet;
-}
-
-export interface Wallet {
-    MaximumFee: number;
-    mint(asset: Asset): Promise<void>;
-    getBalanceByAsset(asset: Asset): Promise<bigint>;
-    getBlockchainTime(): Promise<number>;
+    lightning?: LightningChannel;
 }
 
 export class Wallets {
@@ -32,8 +19,12 @@ export class Wallets {
         return this.getWalletForLedger("ethereum");
     }
 
-    get lightning(): LightningWallet {
+    get lightning(): LightningChannel {
         return this.getWalletForLedger("lightning");
+    }
+
+    set lightning(channel: LightningChannel) {
+        this.wallets.lightning = channel;
     }
 
     public getWalletForLedger<K extends keyof AllWallets>(
@@ -47,59 +38,47 @@ export class Wallets {
 
         return wallet;
     }
-
-    public async initializeForLedger<K extends keyof AllWallets>(
-        name: K,
-        logger: Logger,
-        actor?: ActorName
-    ) {
-        switch (name) {
-            case "ethereum":
-                this.wallets.ethereum = await EthereumWallet.new_instance(
-                    global.ledgerConfigs.ethereum.dev_account_key,
-                    global.ledgerConfigs.ethereum.rpc_url,
-                    logger,
-                    global.gethLockDir,
-                    global.ledgerConfigs.ethereum.chain_id
-                );
-                break;
-            case "bitcoin":
-                this.wallets.bitcoin = await BitcoinWallet.newInstance(
-                    global.ledgerConfigs.bitcoin,
-                    logger
-                );
-                break;
-            case "lightning":
-                switch (actor) {
-                    case "alice": {
-                        this.wallets.lightning = global.lndWallets.alice;
-                        break;
-                    }
-                    case "bob": {
-                        this.wallets.lightning = global.lndWallets.bob;
-                        break;
-                    }
-                    default: {
-                        throw new Error(
-                            `Cannot initialize Lightning wallet for actor: '${actor}'`
-                        );
-                    }
-                }
-        }
-    }
 }
 
-export async function pollUntilMinted(
-    wallet: Wallet,
-    minimumBalance: BigInt,
-    asset: Asset
-): Promise<void> {
-    const currentBalance = await wallet.getBalanceByAsset(asset);
-    if (currentBalance >= minimumBalance) {
-        return;
-    } else {
-        await sleep(500);
+export function newBitcoinStubWallet(): BitcoinWallet {
+    return newStubWallet({
+        MaximumFee: 0n,
+        getAddress: () =>
+            Promise.resolve("bcrt1qq7pflkfujg6dq25n73n66yjkvppq6h9caklrhz"),
+        getBalance: () => Promise.resolve(0n),
+        mint: (_satoshis: bigint) => Promise.resolve(),
+    });
+}
 
-        return pollUntilMinted(wallet, minimumBalance, asset);
-    }
+export function newEthereumStubWallet(): EthereumWallet {
+    return newStubWallet({
+        getAccount: () => "0x00a329c0648769a73afac7f9381e08fb43dbea72",
+        getErc20Balance: (
+            _contractAddress: string,
+            _decimals?: number
+        ): Promise<bigint> => Promise.resolve(0n),
+        mintErc20: (_quantity: bigint, _tokenContract: string) =>
+            Promise.resolve(),
+    });
+}
+
+export function newLightningStubChannel(): LightningChannel {
+    return newStubWallet({
+        getBalance: () => Promise.resolve(0n),
+    });
+}
+
+export function newLndStubClient(): LndClient {
+    const stub = {
+        getPubkey: () =>
+            Promise.resolve(
+                "02ed138aaed50d2d597f6fe8d30759fd3949fe73fdf961322713f1c19e10036a06"
+            ),
+    };
+
+    return (stub as unknown) as LndClient;
+}
+
+function newStubWallet<W, T extends Partial<W>>(stubs: T): W {
+    return (stubs as unknown) as W;
 }

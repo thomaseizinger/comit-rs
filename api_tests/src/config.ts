@@ -1,19 +1,24 @@
 import * as tmp from "tmp";
-import { LedgerConfig } from "./utils";
 import getPort from "get-port";
+import { Role } from "./actors";
 import {
-    LightningNodeConfig,
     BitcoinNodeConfig,
     EthereumNodeConfig,
-} from "./ledgers";
-import { ActorName } from "./actors/actor";
-import { Logger } from "log4js";
+    LedgerConfig,
+    LightningNodeConfig,
+} from "./environment";
 
 export interface CndConfigFile {
     http_api: HttpApi;
     data?: { dir: string };
-    network: { listen: string[] };
+    network: {
+        listen: string[];
+        peer_addresses?: string[];
+    };
     logging: { level: string };
+    bitcoin?: BitcoinConfig;
+    ethereum?: EthereumConfig;
+    lightning?: LightningConfig;
 }
 
 export interface HttpApi {
@@ -23,20 +28,14 @@ export interface HttpApi {
 export class E2ETestActorConfig {
     public readonly data: string;
 
-    public static async for(name: ActorName, logger: Logger) {
-        return new E2ETestActorConfig(
-            await getPort(),
-            await getPort(),
-            name,
-            logger
-        );
+    public static async for(role: Role) {
+        return new E2ETestActorConfig(await getPort(), await getPort(), role);
     }
 
     constructor(
         public readonly httpApiPort: number,
         public readonly comitPort: number,
-        public readonly name: ActorName,
-        private readonly logger: Logger
+        public readonly role: Role
     ) {
         this.httpApiPort = httpApiPort;
         this.comitPort = comitPort;
@@ -65,10 +64,8 @@ export class E2ETestActorConfig {
         };
     }
 
-    private createLedgerConnectors(
-        ledgerConfig: LedgerConfig
-    ): LedgerConnectors {
-        const config: LedgerConnectors = {};
+    private createLedgerConnectors(ledgerConfig: LedgerConfig): LedgerConfigs {
+        const config: LedgerConfigs = {};
 
         if (ledgerConfig.bitcoin) {
             config.bitcoin = bitcoinConnector(ledgerConfig.bitcoin);
@@ -78,8 +75,8 @@ export class E2ETestActorConfig {
             config.ethereum = ethereumConnector(ledgerConfig.ethereum);
         }
 
-        switch (this.name) {
-            case "alice": {
+        switch (this.role) {
+            case "Alice": {
                 if (ledgerConfig.aliceLnd) {
                     config.lightning = lightningConnector(
                         ledgerConfig.aliceLnd
@@ -87,45 +84,43 @@ export class E2ETestActorConfig {
                 }
                 break;
             }
-            case "bob": {
+            case "Bob": {
                 if (ledgerConfig.bobLnd) {
                     config.lightning = lightningConnector(ledgerConfig.bobLnd);
                 }
                 break;
             }
-            case "charlie":
-                {
-                    this.logger.warn(
-                        "generating lnd config for charlie is not supported at this stage"
-                    );
-                }
-                break;
         }
 
         return config;
     }
 }
 
-interface LedgerConnectors {
-    bitcoin?: BitcoinConnector;
-    ethereum?: EthereumConnector;
-    lightning?: LightningConnector;
+interface LedgerConfigs {
+    bitcoin?: BitcoinConfig;
+    ethereum?: EthereumConfig;
+    lightning?: LightningConfig;
 }
 
 interface Geth {
     node_url: string;
 }
 
-interface EthereumConnector {
+interface EthereumConfig {
     chain_id: number;
     geth: Geth;
+    tokens: Tokens;
+}
+
+interface Tokens {
+    dai: string;
 }
 
 interface Bitcoind {
     node_url: string;
 }
 
-interface BitcoinConnector {
+interface BitcoinConfig {
     network: string;
     bitcoind: Bitcoind;
 }
@@ -135,12 +130,12 @@ interface Lnd {
     dir: string;
 }
 
-interface LightningConnector {
+interface LightningConfig {
     network: string;
     lnd: Lnd;
 }
 
-function bitcoinConnector(nodeConfig: BitcoinNodeConfig): BitcoinConnector {
+function bitcoinConnector(nodeConfig: BitcoinNodeConfig): BitcoinConfig {
     return {
         bitcoind: {
             node_url: nodeConfig.rpcUrl,
@@ -149,18 +144,19 @@ function bitcoinConnector(nodeConfig: BitcoinNodeConfig): BitcoinConnector {
     };
 }
 
-function ethereumConnector(nodeConfig: EthereumNodeConfig): EthereumConnector {
+function ethereumConnector(nodeConfig: EthereumNodeConfig): EthereumConfig {
     return {
         chain_id: nodeConfig.chain_id,
         geth: {
             node_url: nodeConfig.rpc_url,
         },
+        tokens: {
+            dai: nodeConfig.tokenContract,
+        },
     };
 }
 
-function lightningConnector(
-    nodeConfig: LightningNodeConfig
-): LightningConnector {
+function lightningConnector(nodeConfig: LightningNodeConfig): LightningConfig {
     return {
         network: "regtest",
         lnd: {

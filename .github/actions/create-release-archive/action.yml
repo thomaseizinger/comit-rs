@@ -1,0 +1,28 @@
+name: Create release archive
+description: Creates a tar archive for a release binary
+inputs:
+  version:
+    description: 'The version of the binary'
+    required: true
+  binary:
+    description: 'The name of the binary to pack into the archive'
+    required: true
+outputs:
+  archive:
+    description: 'The name of the archive'
+    value: ${{ steps.create-archive.outputs.archive }}
+runs:
+  using: "composite"
+  steps:
+    - id: create-archive
+      run: |
+        MACHINE=$(uname -m)
+        KERNEL=$(uname -s)
+        VERSION=${{ inputs.version }}
+
+        ARCHIVE="${{ inputs.binary }}_${VERSION}_${KERNEL}_${MACHINE}.tar.gz"
+
+        tar -C ./target/release --create --file=$ARCHIVE ${{ inputs.binary }}
+
+        echo "::set-output name=archive::$ARCHIVE"
+      shell: bash

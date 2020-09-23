@@ -6,10 +6,10 @@ use crate::{
     btsieve::{
         fetch_blocks_since, BlockByHash, BlockHash, LatestBlock, Predates, PreviousBlockHash,
     },
-    ethereum::{Address, Block, Bytes, Hash, Input, Log, Transaction, TransactionReceipt, U256},
+    ethereum::{Address, Block, Hash, Input, Log, Transaction, TransactionReceipt, U256},
 };
 use async_trait::async_trait;
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use genawaiter::GeneratorState;
 
 #[async_trait]
@@ -33,10 +33,13 @@ impl PreviousBlockHash for Block {
     }
 }
 
+// This tracing context is useful because it conveys information through its
+// name although we skip all fields because they would add too much noise.
+#[tracing::instrument(level = "debug", skip(connector, start_of_swap, expected_bytecode))]
 pub async fn watch_for_contract_creation<C>(
     connector: &C,
-    start_of_swap: NaiveDateTime,
-    bytecode: &Bytes,
+    start_of_swap: DateTime<Utc>,
+    expected_bytecode: &[u8],
 ) -> anyhow::Result<(Transaction, Address)>
 where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = Hash> + ReceiptByHash,
@@ -47,7 +50,7 @@ where
             // creates a contract.
 
             let is_contract_creation = transaction.to.is_none();
-            let is_expected_contract = &transaction.input == bytecode;
+            let is_expected_contract = transaction.input.as_slice() == expected_bytecode;
 
             if !is_contract_creation {
                 tracing::trace!("rejected because transaction doesn't create a contract");
@@ -59,7 +62,7 @@ where
                 // only compute levenshtein distance if we are on trace level, converting to hex is expensive at this scale
                 if tracing::level_enabled!(tracing::level_filters::LevelFilter::TRACE) {
                     let actual = hex::encode(&transaction.input);
-                    let expected = hex::encode(&bytecode);
+                    let expected = hex::encode(expected_bytecode);
 
                     let distance = levenshtein::levenshtein(&actual, &expected);
 
@@ -80,17 +83,23 @@ where
     }
 }
 
+// This tracing context is useful because it conveys information through its
+// name although we skip all fields because they would add too much noise.
+#[tracing::instrument(level = "debug", skip(connector, start_of_swap, expected_event))]
 pub async fn watch_for_event<C>(
     connector: &C,
-    start_of_swap: NaiveDateTime,
-    event: Event,
+    start_of_swap: DateTime<Utc>,
+    expected_event: Event,
 ) -> anyhow::Result<(Transaction, Log)>
 where
     C: LatestBlock<Block = Block> + BlockByHash<Block = Block, BlockHash = Hash> + ReceiptByHash,
 {
-    matching_transaction_and_log(connector, start_of_swap, event.topics.clone(), |receipt| {
-        find_log_for_event_in_receipt(&event, receipt)
-    })
+    matching_transaction_and_log(
+        connector,
+        start_of_swap,
+        expected_event.topics.clone(),
+        |receipt| find_log_for_event_in_receipt(&expected_event, receipt),
+    )
     .await
 }
 
@@ -128,7 +137,7 @@ fn find_log_for_event_in_receipt(event: &Event, receipt: TransactionReceipt) -> 
 
 pub async fn matching_transaction_and_receipt<C, F>(
     connector: &C,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     matcher: F,
 ) -> anyhow::Result<(Transaction, TransactionReceipt)>
 where
@@ -141,7 +150,7 @@ where
         match block_generator.async_resume().await {
             GeneratorState::Yielded(block) => {
                 let span =
-                    tracing::trace_span!("new_block", blockhash = format_args!("{:x}", block.hash));
+                    tracing::trace_span!("new_block", blockhash = format_args!("{}", block.hash));
                 let _enter = span.enter();
 
                 tracing::trace!("checking {} transactions", block.transactions.len());
@@ -150,13 +159,13 @@ where
                     let tx_hash = transaction.hash;
                     let span = tracing::trace_span!(
                         "matching_transaction",
-                        txhash = format_args!("{:x}", tx_hash)
+                        txhash = format_args!("{}", tx_hash)
                     );
                     let _enter = span.enter();
 
                     if matcher(&transaction) {
                         let receipt = fetch_receipt(connector, tx_hash).await?;
-                        if !receipt.is_status_ok() {
+                        if !receipt.successful {
                             // This can be caused by a failed attempt to complete an action,
                             // for example, sending a transaction with low gas.
                             tracing::warn!("transaction matched but status was NOT OK");
@@ -178,7 +187,7 @@ where
 
 async fn matching_transaction_and_log<C, F>(
     connector: &C,
-    start_of_swap: NaiveDateTime,
+    start_of_swap: DateTime<Utc>,
     topics: Vec<Option<Topic>>,
     matcher: F,
 ) -> anyhow::Result<(Transaction, Log)>
@@ -192,7 +201,7 @@ where
         match block_generator.async_resume().await {
             GeneratorState::Yielded(block) => {
                 let span =
-                    tracing::trace_span!("new_block", blockhash = format_args!("{:x}", block.hash));
+                    tracing::trace_span!("new_block", blockhash = format_args!("{}", block.hash));
                 let _enter = span.enter();
 
                 let maybe_contains_transaction = topics.iter().all(|topic| {
@@ -221,14 +230,14 @@ where
 
                     let span = tracing::trace_span!(
                         "matching_transaction",
-                        txhash = format_args!("{:x}", tx_hash)
+                        txhash = format_args!("{}", tx_hash)
                     );
                     let _enter = span.enter();
 
                     let receipt = fetch_receipt(connector, tx_hash).await?;
-                    let status_is_ok = receipt.is_status_ok();
+                    let is_successful = receipt.successful;
                     if let Some(log) = matcher(receipt) {
-                        if !status_is_ok {
+                        if !is_successful {
                             // This can be caused by a failed attempt to complete an action,
                             // for example, sending a transaction with low gas.
                             tracing::warn!("transaction matched but status was NOT OK");
@@ -249,19 +258,19 @@ where
 }
 
 impl Predates for Block {
-    fn predates(&self, timestamp: NaiveDateTime) -> bool {
+    fn predates(&self, timestamp: DateTime<Utc>) -> bool {
         let unix_timestamp = timestamp.timestamp();
 
         self.timestamp < U256::from(unix_timestamp)
     }
 }
 
-#[derive(Clone, Copy, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Topic(pub Hash);
 
 /// Event works similar to web3 filters:
 /// https://web3js.readthedocs.io/en/1.0/web3-eth-subscribe.html?highlight=filter#subscribe-logs
-#[derive(Clone, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Event {
     pub address: Address,
     pub topics: Vec<Option<Topic>>,
